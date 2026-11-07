@@ -70,9 +70,13 @@ src/agentic_rag_router/
   metrics.py       EM / F1 / containment
   oracle.py        oracle labels, splits, summary tables
   router.py        gated MLP router
+  train.py         router training (oracle and correctness objectives)
+  baselines.py     fixed, random, kNN and logistic-regression routers
+  evaluation.py    accuracy/cost, Pareto AUC, bootstrap CI, McNemar, ECE
   orchestrator.py  inference-time routing with confidence escalation
 notebooks/
   01_build_oracle_dataset.ipynb
+  02_train_router.ipynb
 scripts/make_notebook.py
 tests/test_core.py
 ```
@@ -82,7 +86,9 @@ tests/test_core.py
 **Kaggle (recommended).** Import `notebooks/01_build_oracle_dataset.ipynb`
 from this repository, set *Accelerator: GPU T4 x2* and *Internet: On*, run
 with `RUN_MODE = "smoke"`, check the tables, then set `RUN_MODE = "full"`.
-The run is resumable across sessions.
+The run is resumable across sessions. Then run
+`notebooks/02_train_router.ipynb` in the same session (or attach notebook 01's
+output as an input) to train the router and all baselines.
 
 **Tests (CPU, no downloads).**
 
@@ -93,18 +99,19 @@ pytest -q
 
 ## Roadmap
 
-1. Oracle dataset (English) ← *current*
-2. Code-mixed English / Roman Urdu query set with human-checked sample
-3. Router training; baselines: random, always-cheapest, always-strongest,
-   kNN, logistic regression, zero-shot LLM router, complexity classifier
-4. Accuracy-vs-cost Pareto curves, calibration (ECE), latency
-5. Ablations (gate, normalisation, masking), 5 seeds, bootstrap CIs, McNemar
-6. Public release of dataset, router weights and leaderboard
+1. Oracle dataset (English) — implemented
+2. Router training with fixed, random, kNN and logistic-regression baselines,
+   Pareto AUC, 5 seeds, bootstrap CIs, McNemar, ECE, gate ablation — implemented
+3. Code-mixed English / Roman Urdu query set with human-checked sample
+4. Further baselines: zero-shot LLM router, complexity classifier
+5. Public release of dataset, router weights and leaderboard
 
-## Data licences
+## Licence
 
-NQ-Open (CC BY-SA 3.0), SQuAD v1.1 (CC BY-SA 4.0), HotpotQA (CC BY-SA 4.0),
-MuSiQue (CC BY 4.0). Derived labels inherit the share-alike terms.
+Code and router weights: [Apache License 2.0](LICENSE) (see [NOTICE](NOTICE)).
+Derived datasets: CC BY-SA 4.0, inherited from the sources — NQ-Open
+(CC BY-SA 3.0), SQuAD v1.1 (CC BY-SA 4.0), HotpotQA (CC BY-SA 4.0),
+MuSiQue (CC BY 4.0).
 
 ## Author
 

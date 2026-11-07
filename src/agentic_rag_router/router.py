@@ -22,9 +22,16 @@ class DynamicNeuralRouter(nn.Module):
     one is down or over budget.
     """
 
-    def __init__(self, d_model: int = 768, num_agents: int = 4, hidden: int = 384, dropout: float = 0.1):
+    def __init__(
+        self,
+        d_model: int = 768,
+        num_agents: int = 4,
+        hidden: int = 384,
+        dropout: float = 0.1,
+        use_gate: bool = True,
+    ):
         super().__init__()
-        self.gate = nn.Linear(d_model, d_model)
+        self.gate = nn.Linear(d_model, d_model) if use_gate else None
         self.mlp = nn.Sequential(
             nn.Linear(d_model, hidden),
             nn.LayerNorm(hidden),
@@ -34,8 +41,9 @@ class DynamicNeuralRouter(nn.Module):
         )
 
     def forward(self, embeddings: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        gated = embeddings * torch.sigmoid(self.gate(embeddings))
-        logits = self.mlp(gated)
+        if self.gate is not None:
+            embeddings = embeddings * torch.sigmoid(self.gate(embeddings))
+        logits = self.mlp(embeddings)
         if mask is not None:
             mask = mask.to(dtype=torch.bool, device=logits.device)
             if not bool(mask.any(dim=-1).all()):

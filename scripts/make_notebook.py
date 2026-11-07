@@ -1,9 +1,9 @@
-"""Regenerates notebooks/01_build_oracle_dataset.ipynb from the cells below."""
+"""Regenerates the Kaggle notebooks in notebooks/ from the cell lists below."""
 
 import json
 from pathlib import Path
 
-CELLS = [
+NB01 = [
     ("markdown", """# Agentic RAG Router — 01: Build the oracle routing dataset
 
 Every benchmark question is answered by all four specialist agents. For each answer we record correctness and the exact cost (LLM calls, tokens, FLOPs, time). The **oracle label** of a question is the cheapest agent that answered it correctly. These labels are what the neural router learns to predict.
@@ -157,8 +157,195 @@ print(sorted(p.name for p in OUT.iterdir()))"""),
 ]
 
 
-def main() -> None:
-    nb = {
+NB02 = [
+    ("markdown", """# Agentic RAG Router — 02: Train the router and compare against baselines
+
+Input: the oracle dataset from notebook 01 (`oracle_labels.csv`, `query_emb.npy`). Either run this in the same session after notebook 01, or attach notebook 01's output with **Add Input → Notebook output**.
+
+**What is compared (test split only, never used for training or model selection):**
+- fixed policies: always agent A / B / C / D, random, majority label, and the oracle (upper bound)
+- learned baselines on the same 768-d embeddings: cosine kNN, logistic regression
+- the neural router, two objectives: *oracle* (softmax over agents) and *correctness* (P(correct) per agent), plus a no-gate ablation
+- 5 seeds per neural model; 95% bootstrap CIs; exact McNemar tests; calibration (ECE)
+
+**Operating point.** Each learned policy has a threshold τ that trades accuracy for compute. τ* is chosen **on the validation split** as the cheapest setting that stays within 1 point of the strongest agent's validation accuracy, then applied unchanged to the test split.
+
+Accelerator: GPU or CPU both work (the router is small)."""),
+    NB01[1],
+    ("code", """import glob
+work = Path("/kaggle/working" if Path("/kaggle").exists() else ".")
+cands = sorted(glob.glob("/kaggle/input/**/oracle_labels.csv", recursive=True)) + sorted(str(p) for p in work.glob("oracle_*/oracle_labels.csv"))
+assert cands, "No oracle_labels.csv found: run notebook 01 first, or add its output as an input."
+DATA_DIR = Path(([c for c in cands if "oracle_full" in c] or cands)[0]).parent
+print("using", DATA_DIR)
+
+oracle = pd.read_csv(DATA_DIR / "oracle_labels.csv")
+data_manifest = json.loads((DATA_DIR / "manifest.json").read_text())
+ORDER = data_manifest["agent_cost_order"]
+qids = json.loads((DATA_DIR / "query_emb_qids.json").read_text())
+emb = np.load(DATA_DIR / "query_emb.npy")
+pos = {q: i for i, q in enumerate(qids)}
+
+X = emb[[pos[q] for q in oracle["qid"]]].astype(np.float32)
+C = oracle[[f"correct__{a}" for a in ORDER]].to_numpy(dtype=int)      # n x K, 1 = agent answered correctly
+FL = oracle[[f"flops__{a}" for a in ORDER]].to_numpy(dtype=float)     # n x K, measured compute
+y = oracle["oracle_label"].to_numpy(dtype=int)                         # cheapest correct agent
+K = len(ORDER)
+S = {s: np.where(oracle["split"].to_numpy() == s)[0] for s in ["train", "val", "test"]}
+tr, va, te = S["train"], S["val"], S["test"]
+print({s: len(i) for s, i in S.items()}, "| agents (cheap -> strong):", ORDER)
+if len(tr) < 500:
+    print("WARNING: smoke-sized data. This run only checks the code path; the numbers are not results.")
+SEEDS = [0, 1, 2, 3, 4]"""),
+    ("code", """from agentic_rag_router import baselines as bl, evaluation as ev
+
+choices = {}   # policy name -> list of test choice arrays (one per seed)
+probs = {}     # learned policy name -> list of (val_scores, test_scores), one per seed
+
+for k, a in enumerate(ORDER):
+    choices[f"always {a}"] = [bl.fixed(len(te), k)]
+choices["random"] = [bl.random_uniform(len(te), K, s) for s in SEEDS]
+choices["majority label"] = [bl.majority_class(y[tr], len(te), K)]
+choices["oracle (upper bound)"] = [y[te]]
+
+probs["kNN (k=15)"] = [(bl.knn_proba(X[tr], y[tr], X[va], K), bl.knn_proba(X[tr], y[tr], X[te], K))]
+lr = bl.fit_logistic_regression(X[tr], y[tr], K)
+probs["logistic regression"] = [(lr(X[va]), lr(X[te]))]
+print("baselines ready")"""),
+    ("code", """from agentic_rag_router.train import TrainConfig, train_router, predict
+
+VARIANTS = {
+    "router: oracle": TrainConfig(objective="oracle"),
+    "router: correctness": TrainConfig(objective="correctness"),
+    "router: oracle, no gate (ablation)": TrainConfig(objective="oracle", use_gate=False),
+}
+models = {}
+for name, tc in VARIANTS.items():
+    T = y if tc.objective == "oracle" else C
+    probs[name], models[name] = [], []
+    for s in SEEDS:
+        m, hist = train_router(X[tr], T[tr], X[va], T[va], K, tc, seed=s)
+        probs[name].append((predict(m, X[va], tc.objective), predict(m, X[te], tc.objective)))
+        models[name].append((m, hist))
+    best_ep = [min(h, key=lambda r: r["val_loss"])["epoch"] for _, h in models[name]]
+    print(f"{name}: best epochs per seed {best_ep}")"""),
+    ("code", """TAUS = np.linspace(0, 1, 41)
+
+def policy_fn(name):
+    return ev.cheapest_confident if "correctness" in name else ev.confidence_escalation
+
+def pick_tau(name, val_scores):
+    \"\"\"Cheapest tau (on validation) within 1 point of the strongest agent's validation accuracy.\"\"\"
+    fn, target = policy_fn(name), C[va][:, -1].mean() - 0.01
+    stats = [(float(t), ev.policy_metrics(fn(val_scores, float(t)), C[va], FL[va])) for t in TAUS]
+    ok = [(t, m["gflops"]) for t, m in stats if m["accuracy"] >= target]
+    return min(ok, key=lambda x: x[1])[0] if ok else max(stats, key=lambda x: x[1]["accuracy"])[0]
+
+tau_star = {}
+for name, runs in probs.items():
+    fn = policy_fn(name)
+    default_tau = 0.5 if "correctness" in name else 0.0   # 0.0 = plain argmax
+    choices[f"{name} (default)"] = [fn(pt, default_tau) for _, pt in runs]
+    taus = [pick_tau(name, pv) for pv, _ in runs]
+    tau_star[name] = taus
+    choices[f"{name} @ tau*"] = [fn(pt, t) for (_, pt), t in zip(runs, taus)]
+
+rows = []
+for name, cs in choices.items():
+    ms = [ev.policy_metrics(c, C[te], FL[te], y[te]) for c in cs]
+    acc = np.array([m["accuracy"] for m in ms])
+    lo, hi = ev.bootstrap_ci(C[te][np.arange(len(te)), cs[0]].astype(float))
+    rows.append({
+        "policy": name, "seeds": len(ms),
+        "accuracy": acc.mean(), "acc_std": acc.std(), "acc_ci95": f"[{lo:.3f}, {hi:.3f}]",
+        "gflops/query": np.mean([m["gflops"] for m in ms]),
+        "cost_vs_strongest": np.mean([m["cost_vs_strongest"] for m in ms]),
+        "routing_acc": np.mean([m["routing_accuracy"] for m in ms]),
+    })
+results = pd.DataFrame(rows).set_index("policy").round(4)
+print("Test split. CI = 95% bootstrap over questions (seed 0). cost_vs_strongest = compute relative to always using the strongest agent.")
+display(results)
+print("tau* chosen on validation:", {k: [round(t, 3) for t in v] for k, v in tau_star.items()})"""),
+    ("code", """import matplotlib.pyplot as plt
+
+max_cost = FL[te][:, -1].mean() / 1e9
+curves, auc = {}, {}
+for name, runs in probs.items():
+    per_seed = []
+    for _, pt in runs:
+        pts = ev.sweep(policy_fn(name), pt, C[te], FL[te], TAUS)
+        per_seed.append(ev.area_under_curve([(c, a) for _, c, a in pts], max_cost))
+    curves[name] = ev.pareto_front([(c, a) for _, c, a in ev.sweep(policy_fn(name), runs[0][1], C[te], FL[te], TAUS)])
+    auc[name] = (float(np.mean(per_seed)), float(np.std(per_seed)))
+
+fig, ax = plt.subplots(figsize=(7.5, 5))
+for name, front in curves.items():
+    cs, accs = zip(*front)
+    ax.step(cs, accs, where="post", label=f"{name}  (AUC {auc[name][0]:.3f})")
+for k, a in enumerate(ORDER):
+    m = ev.policy_metrics(bl.fixed(len(te), k), C[te], FL[te])
+    ax.scatter(m["gflops"], m["accuracy"], marker="s", s=40, zorder=3)
+    ax.annotate(a, (m["gflops"], m["accuracy"]), textcoords="offset points", xytext=(5, -10), fontsize=8)
+m = ev.policy_metrics(y[te], C[te], FL[te])
+ax.scatter(m["gflops"], m["accuracy"], marker="*", s=160, color="k", zorder=4, label="oracle router")
+ax.set_xlabel("mean GFLOPs per query"); ax.set_ylabel("answer accuracy (F1 >= 0.5)")
+ax.set_title("Accuracy vs compute on the test split"); ax.legend(fontsize=7, loc="lower right"); ax.grid(alpha=.3)
+fig.tight_layout(); fig.savefig(work / "pareto_test.png", dpi=200); plt.show()
+print("normalised area under the accuracy-cost front (mean ± std over seeds):")
+print({k: f"{m:.4f} ± {s:.4f}" for k, (m, s) in auc.items()})"""),
+    ("code", """def hits(policy, seed=0):
+    return C[te][np.arange(len(te)), choices[policy][seed]]
+
+strongest = f"always {ORDER[-1]}"
+tests = {}
+for name in ["router: oracle @ tau*", "router: correctness @ tau*"]:
+    for ref in [strongest, "logistic regression @ tau*", "kNN (k=15) @ tau*"]:
+        tests[f"{name} vs {ref}"] = ev.mcnemar_exact(hits(name), hits(ref))
+display(pd.DataFrame(tests).T)
+
+ece = [ev.expected_calibration_error(pt, C[te]) for _, pt in probs["router: correctness"]]
+print(f"ECE of P(correct) from the correctness router (all agents, test): {np.mean(ece):.4f} ± {np.std(ece):.4f}")"""),
+    ("code", """import torch
+# Export the single best router (by validation AUC) for release.
+best = None
+for name in ["router: oracle", "router: correctness"]:
+    for s, ((pv, _), (model, _)) in enumerate(zip(probs[name], models[name])):
+        pts = ev.sweep(policy_fn(name), pv, C[va], FL[va], TAUS)
+        a = ev.area_under_curve([(c, acc) for _, c, acc in pts], FL[va][:, -1].mean() / 1e9)
+        if best is None or a > best[0]:
+            best = (a, name, s, model)
+val_auc, name, seed, model = best
+tc = VARIANTS[name]
+EXPORT = work / "router_release"
+EXPORT.mkdir(exist_ok=True)
+torch.save(model.state_dict(), EXPORT / "router.pt")
+(EXPORT / "router_config.json").write_text(json.dumps({
+    "agents": ORDER,
+    "embedding_model": data_manifest["config"]["embedding_model"],
+    "d_model": int(X.shape[1]), "num_agents": K,
+    "train_config": tc.to_dict(), "seed": seed,
+    "policy": "cheapest_confident" if tc.objective == "correctness" else "confidence_escalation",
+    "tau": tau_star[name][seed], "val_auc": val_auc,
+    "data_commit": data_manifest["repo_commit"], "code_commit": COMMIT,
+}, indent=2))
+results.to_csv(work / "results_test.csv")
+(work / "results.json").write_text(json.dumps({
+    "auc": auc, "tau_star": tau_star, "mcnemar": tests, "ece_correctness": ece,
+    "splits": {k: int(len(v)) for k, v in S.items()}, "data_dir": str(DATA_DIR),
+}, indent=2, default=float))
+print(f"exported {name} (seed {seed}, val AUC {val_auc:.4f}) ->", EXPORT)"""),
+    ("markdown", """### Reading the results
+- **accuracy / gflops** of `router … @ tau*` against `always <strongest>` is the headline: same accuracy (within 1 point, by construction on validation) at what fraction of the compute?
+- The **oracle** row is the ceiling; the gap between the router and the oracle is the room left for better routing.
+- A router is only useful if it beats **logistic regression and kNN** on the same features; McNemar p < 0.05 says the accuracy difference is unlikely to be chance.
+- **No-gate ablation** shows whether the feature gate earns its parameters.
+
+Outputs in `/kaggle/working`: `results_test.csv`, `results.json`, `pareto_test.png`, `router_release/` (weights + config for Hugging Face)."""),
+]
+
+
+def build(cells) -> dict:
+    return {
         "cells": [
             {
                 "cell_type": kind,
@@ -166,7 +353,7 @@ def main() -> None:
                 "source": src.splitlines(keepends=True),
                 **({"outputs": [], "execution_count": None} if kind == "code" else {}),
             }
-            for kind, src in CELLS
+            for kind, src in cells
         ],
         "metadata": {
             "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
@@ -176,9 +363,14 @@ def main() -> None:
         "nbformat": 4,
         "nbformat_minor": 5,
     }
-    out = Path(__file__).resolve().parents[1] / "notebooks" / "01_build_oracle_dataset.ipynb"
-    out.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n")
-    print("wrote", out)
+
+
+def main() -> None:
+    root = Path(__file__).resolve().parents[1] / "notebooks"
+    for name, cells in [("01_build_oracle_dataset.ipynb", NB01), ("02_train_router.ipynb", NB02)]:
+        out = root / name
+        out.write_text(json.dumps(build(cells), indent=1, ensure_ascii=False) + "\n")
+        print("wrote", out)
 
 
 if __name__ == "__main__":

@@ -233,3 +233,45 @@ def test_pipeline_oracle_and_resume(tmp_path):
 
     again = run_agents(questions, cfg, retriever, encode, tmp_path, llm_factory=boom, log=lambda s: None)
     assert {k: len(v) for k, v in again.items()} == {"cheap": 10, "rich": 10}
+
+
+# ---------------------------------------------------------------- evaluation + baselines
+from agentic_rag_router import baselines, evaluation as ev  # noqa: E402
+
+
+def test_policy_metrics_and_policies():
+    correct = np.array([[1, 1, 1], [0, 1, 1], [0, 0, 1], [0, 0, 0]])
+    flops = np.tile([1e9, 2e9, 4e9], (4, 1)).astype(float)
+    oracle = np.array([0, 1, 2, 2])
+    m = ev.policy_metrics(oracle, correct, flops, oracle)
+    assert m["accuracy"] == 0.75 and m["routing_accuracy"] == 1.0
+    assert m["gflops"] == pytest.approx((1 + 2 + 4 + 4) / 4)
+    assert m["cost_vs_strongest"] == pytest.approx(11 / 16)
+
+    probs = np.array([[0.9, 0.05, 0.05], [0.4, 0.35, 0.25]])
+    assert ev.confidence_escalation(probs, 0.5).tolist() == [0, 2]
+    pc = np.array([[0.2, 0.8, 0.9], [0.1, 0.2, 0.3]])
+    assert ev.cheapest_confident(pc, 0.7).tolist() == [1, 2]
+
+
+def test_pareto_auc_bootstrap_mcnemar_ece():
+    front = ev.pareto_front([(1, 0.5), (2, 0.4), (3, 0.7), (3, 0.6)])
+    assert front == [(1, 0.5), (3, 0.7)]
+    assert ev.area_under_curve([(1, 0.5), (3, 0.7)], max_cost=4) == pytest.approx((0 * 1 + 0.5 * 2 + 0.7 * 1) / 4)
+    lo, hi = ev.bootstrap_ci(np.array([0, 1] * 50, dtype=float))
+    assert lo < 0.5 < hi
+    a, b = np.array([1] * 10 + [0] * 10), np.array([0] * 10 + [0] * 10)
+    r = ev.mcnemar_exact(a, b)
+    assert r["a_only"] == 10 and r["p_value"] == pytest.approx(2 / 2**10)
+    assert ev.mcnemar_exact(a, a)["p_value"] == 1.0
+    assert ev.expected_calibration_error(np.array([0.9, 0.9]), np.array([1, 1])) == pytest.approx(0.1)
+
+
+def test_baselines_shapes_and_knn_vote():
+    X = np.array([[1, 0], [0.9, 0.1], [0, 1], [0.1, 0.9]])
+    y = np.array([0, 0, 2, 2])
+    p = baselines.knn_proba(X, y, np.array([[1, 0.05]]), k_agents=3, k=2)
+    assert p.tolist() == [[1.0, 0.0, 0.0]]
+    lr = baselines.fit_logistic_regression(X, y, k_agents=3)(X)
+    assert lr.shape == (4, 3) and np.allclose(lr.sum(1), 1) and (lr[:, 1] == 0).all()
+    assert baselines.majority_class(np.array([1, 1, 2]), 3, 3).tolist() == [1, 1, 1]
