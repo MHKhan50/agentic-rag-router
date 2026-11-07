@@ -31,18 +31,21 @@ class AgentSpec:
     batch_size: int = 16
 
 
+# A 2 x 2 design (model size x retrieval) plus iterative retrieval, so results
+# separate what a bigger model buys from what retrieval buys.
 DEFAULT_AGENTS: List[AgentSpec] = [
-    AgentSpec("A_direct_small", SMALL_LLM, "direct", batch_size=32),
-    AgentSpec("B_rag_small", SMALL_LLM, "single_rag", top_k=5, max_passages=5, batch_size=16),
-    AgentSpec("C_rag_large", LARGE_LLM, "single_rag", top_k=5, max_passages=5, batch_size=8),
+    AgentSpec("A_direct_small", SMALL_LLM, "direct", batch_size=64),
+    AgentSpec("B_direct_large", LARGE_LLM, "direct", batch_size=32),
+    AgentSpec("C_rag_small", SMALL_LLM, "single_rag", top_k=5, max_passages=5, batch_size=32),
+    AgentSpec("D_rag_large", LARGE_LLM, "single_rag", top_k=5, max_passages=5, batch_size=16),
     AgentSpec(
-        "D_iterative_large",
+        "E_iterative_large",
         LARGE_LLM,
         "iterative_rag",
         top_k=3,
         max_steps=3,
         max_passages=9,
-        batch_size=8,
+        batch_size=16,
     ),
 ]
 
@@ -59,8 +62,9 @@ class PipelineConfig:
     passage_max_words: int = 120  # passage truncation inside prompts
     answer_max_new_tokens: int = 32
     step_max_new_tokens: int = 48
-    # A prediction counts as correct when token-F1 >= this threshold.
-    correct_f1_threshold: float = 0.5
+    # Correct = exact match, or gold answer contained in the prediction, or
+    # token F1 >= this threshold (see metrics.is_correct).
+    correct_f1_threshold: float = 0.6
     split_fractions: Dict[str, float] = field(
         default_factory=lambda: {"train": 0.7, "val": 0.15, "test": 0.15}
     )

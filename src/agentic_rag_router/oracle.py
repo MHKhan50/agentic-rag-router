@@ -20,7 +20,7 @@ from typing import Dict, List
 import pandas as pd
 
 from .data import Question
-from .metrics import score
+from .metrics import is_correct, score
 
 COST_COLUMNS = ["llm_calls", "prompt_tokens", "gen_tokens", "retrieval_calls", "seconds", "flops"]
 
@@ -50,10 +50,10 @@ def agent_cost_order(long: pd.DataFrame) -> List[str]:
     return long.groupby("agent")["flops"].mean().sort_values().index.tolist()
 
 
-def build_oracle(long: pd.DataFrame, f1_threshold: float = 0.5) -> pd.DataFrame:
+def build_oracle(long: pd.DataFrame, f1_threshold: float = 0.6) -> pd.DataFrame:
     """Wide table: one row per question with the oracle label."""
     order = agent_cost_order(long)
-    long = long.assign(correct=(long["f1"] >= f1_threshold).astype(int))
+    long = add_correct(long, f1_threshold)
     correct = long.pivot(index="qid", columns="agent", values="correct")[order]
     flops = long.pivot(index="qid", columns="agent", values="flops")[order]
     meta = long.drop_duplicates("qid").set_index("qid")[["dataset"]]
@@ -100,17 +100,24 @@ def assign_splits(oracle: pd.DataFrame, fractions: Dict[str, float], seed: int) 
     return oracle["qid"].map(split)
 
 
-def summarise(long: pd.DataFrame, oracle: pd.DataFrame) -> pd.DataFrame:
+def add_correct(long: pd.DataFrame, f1_threshold: float = 0.6) -> pd.DataFrame:
+    return long.assign(
+        correct=[int(is_correct(r, f1_threshold)) for r in long[["em", "f1", "acc"]].to_dict("records")]
+    )
+
+
+def summarise(long: pd.DataFrame, oracle: pd.DataFrame, f1_threshold: float = 0.6) -> pd.DataFrame:
     """Per-agent accuracy and cost, plus the oracle router as an upper bound."""
     order = oracle.attrs.get("agent_order") or agent_cost_order(long)
+    long = add_correct(long, f1_threshold)
     agg = long.groupby("agent").agg(
-        em=("em", "mean"), f1=("f1", "mean"), acc=("acc", "mean"),
+        correct=("correct", "mean"), em=("em", "mean"), f1=("f1", "mean"), acc=("acc", "mean"),
         llm_calls=("llm_calls", "mean"), tokens=("prompt_tokens", "mean"),
         seconds=("seconds", "mean"), gflops=("flops", lambda x: x.mean() / 1e9),
     ).loc[order]
     best = long.merge(oracle[["qid", "oracle_agent"]], left_on=["qid", "agent"], right_on=["qid", "oracle_agent"])
     agg.loc["ORACLE_ROUTER"] = {
-        "em": best["em"].mean(), "f1": best["f1"].mean(), "acc": best["acc"].mean(),
+        "correct": best["correct"].mean(), "em": best["em"].mean(), "f1": best["f1"].mean(), "acc": best["acc"].mean(),
         "llm_calls": best["llm_calls"].mean(), "tokens": best["prompt_tokens"].mean(),
         "seconds": best["seconds"].mean(), "gflops": best["flops"].mean() / 1e9,
     }

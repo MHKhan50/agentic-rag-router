@@ -9,13 +9,22 @@ from typing import Dict, List
 
 _ARTICLES = re.compile(r"\b(a|an|the)\b", re.UNICODE)
 _PUNCT = set(string.punctuation)
+_NUMBER_WORDS = {
+    w: str(i)
+    for i, w in enumerate(
+        "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+        "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+    )
+}
 
 
 def normalize_answer(s: str) -> str:
+    """SQuAD normalisation, plus number words zero-twenty mapped to digits
+    so that "three" and "3" match."""
     s = s.lower()
     s = "".join(ch for ch in s if ch not in _PUNCT)
     s = _ARTICLES.sub(" ", s)
-    return " ".join(s.split())
+    return " ".join(_NUMBER_WORDS.get(t, t) for t in s.split())
 
 
 def exact_match(prediction: str, gold: str) -> float:
@@ -49,3 +58,13 @@ def score(prediction: str, golds: List[str]) -> Dict[str, float]:
         "f1": max(token_f1(prediction, g) for g in golds),
         "acc": max(contains(prediction, g) for g in golds),
     }
+
+
+def is_correct(scores: Dict[str, float], f1_threshold: float = 0.6) -> bool:
+    """Exact match, gold answer contained in a short prediction, or high token F1.
+
+    The F1 threshold sits above 0.5 on purpose: at exactly 0.5 a prediction
+    shares only half its tokens with the gold answer ("Articles 101(3) and
+    102" vs "Articles 106 and 107"), which is wrong far more often than right.
+    """
+    return bool(scores["em"] == 1 or scores["acc"] == 1 or scores["f1"] >= f1_threshold)

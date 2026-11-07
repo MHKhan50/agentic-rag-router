@@ -72,6 +72,15 @@ def test_metrics_standard_cases():
     s = score("William", ["William Shakespeare"])
     assert s["em"] == 0.0 and s["f1"] == pytest.approx(2 / 3) and s["acc"] == 0.0
     assert score("", ["x"])["f1"] == 0.0
+    assert score("3", ["three"])["em"] == 1.0  # number words normalised
+
+
+def test_correctness_rule_rejects_half_overlap():
+    from agentic_rag_router.metrics import is_correct
+
+    assert not is_correct(score("Articles 101(3) and 102", ["Articles 106 and 107"]))  # F1 = 0.5
+    assert is_correct(score("Thorgan Hazard", ["Thorgan Ganael Francis Hazard"]))  # F1 = 0.67
+    assert is_correct(score("to evade being drafted into the army", ["being drafted"]))  # contained
 
 
 # ---------------------------------------------------------------- data
@@ -120,6 +129,12 @@ def test_answer_and_step_parsing():
     assert prompts.parse_answer("Paris") == "Paris"
     assert prompts.parse_step("Search: birthplace of Shakespeare") == ("search", "birthplace of Shakespeare")
     assert prompts.parse_step("Answer: 1994") == ("answer", "1994")
+    # Failure modes seen in real runs:
+    assert prompts.parse_answer("Answer: Answer: Leia Organa") == "Leia Organa"
+    assert prompts.parse_step("Answer: Search: release companies of Cinderella") == (
+        "search",
+        "release companies of Cinderella",
+    )
 
 
 # ---------------------------------------------------------------- agents
@@ -176,7 +191,18 @@ def test_iterative_agent_forces_answer_on_last_step():
     llm = FakeLLM(lambda m: "Search: something else")
     [res] = Agent(spec, llm, retriever, encode).run([q])
     assert res.llm_calls == 2  # step 1 searched, step 2 had to answer
-    assert res.prediction == "Search: something else"  # unparsed text kept as the answer
+    assert res.retrieval_calls == 2
+
+
+def test_iterative_agent_stops_repeated_searches():
+    q, retriever, encode = _fake_world()
+
+    spec = AgentSpec("E", "fake", "iterative_rag", top_k=1, max_steps=3, max_passages=5)
+    llm = FakeLLM(lambda m: "Search: " + q.question + "?" if "Searches already made" in m[-1]["content"] else "Answer: Stratford")
+    [res] = Agent(spec, llm, retriever, encode).run([q])
+    # Step 1 repeats the original question -> no new retrieval; step 2 must answer.
+    assert res.retrieval_calls == 1 and res.llm_calls == 2
+    assert res.prediction == "Stratford"
 
 
 def test_direct_agent_needs_no_retriever():

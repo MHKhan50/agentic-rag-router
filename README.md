@@ -24,9 +24,14 @@ of the strongest agent's compute, and does it stay reliable on code-mixed
 | Agent | Generator (Apache-2.0) | Strategy |
 |---|---|---|
 | `A_direct_small` | Qwen2.5-1.5B-Instruct | answer from parametric knowledge |
-| `B_rag_small` | Qwen2.5-1.5B-Instruct | dense retrieval once (top-5), answer |
-| `C_rag_large` | Qwen2.5-7B-Instruct | dense retrieval once (top-5), answer |
-| `D_iterative_large` | Qwen2.5-7B-Instruct | up to 3 interleaved reason / retrieve steps |
+| `B_direct_large` | Qwen2.5-7B-Instruct | answer from parametric knowledge |
+| `C_rag_small` | Qwen2.5-1.5B-Instruct | dense retrieval once (top-5), answer |
+| `D_rag_large` | Qwen2.5-7B-Instruct | dense retrieval once (top-5), answer |
+| `E_iterative_large` | Qwen2.5-7B-Instruct | up to 3 interleaved reason / retrieve steps; repeated queries end the search |
+
+Model size × retrieval form a 2 × 2 grid (A–D), with iterative retrieval (E)
+on top, so the results separate what a larger model buys from what retrieval
+buys.
 
 Retriever and router features: `intfloat/multilingual-e5-base` (768-d,
 94 languages). All agents share one prompt format and greedy decoding, so
@@ -47,8 +52,11 @@ oracle context.
 
 ## Oracle labels
 
-Each question is answered by every agent. A prediction is correct when token
-F1 ≥ 0.5 (SQuAD normalisation; EM and containment accuracy are also stored).
+Each question is answered by every agent. A prediction is correct when it is
+an exact match, contains the gold answer, or reaches token F1 ≥ 0.6 (SQuAD
+normalisation, with number words mapped to digits). The threshold is above
+0.5 because half-overlap answers ("Articles 101(3) and 102" for "Articles 106
+and 107") were wrong in every case inspected.
 The label is the cheapest correct agent, with agents ranked by **measured**
 mean FLOPs (≈ 2 × parameters × tokens processed). Questions no agent answers
 are labelled with the strongest agent and flagged. Every per-agent score and

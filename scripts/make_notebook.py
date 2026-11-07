@@ -6,20 +6,23 @@ from pathlib import Path
 NB01 = [
     ("markdown", """# Agentic RAG Router — 01: Build the oracle routing dataset
 
-Every benchmark question is answered by all four specialist agents. For each answer we record correctness and the exact cost (LLM calls, tokens, FLOPs, time). The **oracle label** of a question is the cheapest agent that answered it correctly. These labels are what the neural router learns to predict.
+Every benchmark question is answered by all five specialist agents. For each answer we record correctness and the exact cost (LLM calls, tokens, FLOPs, time). The **oracle label** of a question is the cheapest agent that answered it correctly. These labels are what the neural router learns to predict.
 
 | Agent | Generator | Strategy |
 |---|---|---|
 | `A_direct_small` | Qwen2.5-1.5B-Instruct | no retrieval |
-| `B_rag_small` | Qwen2.5-1.5B-Instruct | retrieve once (top-5) |
-| `C_rag_large` | Qwen2.5-7B-Instruct | retrieve once (top-5) |
-| `D_iterative_large` | Qwen2.5-7B-Instruct | up to 3 reason/retrieve steps |
+| `B_direct_large` | Qwen2.5-7B-Instruct | no retrieval |
+| `C_rag_small` | Qwen2.5-1.5B-Instruct | retrieve once (top-5) |
+| `D_rag_large` | Qwen2.5-7B-Instruct | retrieve once (top-5) |
+| `E_iterative_large` | Qwen2.5-7B-Instruct | up to 3 reason/retrieve steps |
+
+A prediction is **correct** if it matches exactly, contains the gold answer, or has token F1 ≥ 0.6.
 
 Retrieval: `intfloat/multilingual-e5-base` (768-d) over one pooled corpus.
 Questions: NQ-Open, SQuAD v1.1, HotpotQA (distractor), MuSiQue-Ans (validation splits).
 
 **Kaggle settings:** Accelerator = *GPU T4 x2*, Internet = *On*.
-Run with `RUN_MODE = "smoke"` first (~10 min), then switch to `"full"`. The run is resumable: if the session stops, run all cells again and finished questions are skipped."""),
+Run with `RUN_MODE = "smoke"` first (~15 min), then switch to `"full"`. The run is resumable: if the session stops, run all cells again and finished questions are skipped."""),
     ("code", """import os, sys, subprocess, json, time, platform
 from pathlib import Path
 
@@ -99,10 +102,11 @@ order = oracle.attrs["agent_order"]
 print("agent cost order (by measured FLOPs):", order)
 
 print("\\n== Accuracy and cost per agent (all questions) ==")
-display(summarise(long, oracle))
+display(summarise(long, oracle, cfg.correct_f1_threshold))
 
-print("\\n== F1 per agent per dataset ==")
-display(long.pivot_table(index="dataset", columns="agent", values="f1", aggfunc="mean")[order].round(3))
+from agentic_rag_router.oracle import add_correct
+print("\\n== Accuracy (correct) per agent per dataset ==")
+display(add_correct(long, cfg.correct_f1_threshold).pivot_table(index="dataset", columns="agent", values="correct", aggfunc="mean")[order].round(3))
 
 print("\\n== Oracle label distribution per dataset ==")
 display(pd.crosstab(oracle["dataset"], oracle["oracle_agent"])[[a for a in order if a in set(oracle["oracle_agent"])]])
@@ -127,7 +131,7 @@ y = torch.tensor(oracle["oracle_label"].values)
 router = DynamicNeuralRouter(d_model=X.shape[1], num_agents=len(order))
 logits = router(X)
 print("features", tuple(X.shape), "| labels", tuple(y.shape), "| logits", tuple(logits.shape))
-print("untrained loss", torch.nn.functional.cross_entropy(logits, y).item(), "(~ln 4 = 1.386 expected)")"""),
+print("untrained loss", torch.nn.functional.cross_entropy(logits, y).item(), "(~ln K expected)", f"K={len(order)}")"""),
     ("code", """import shutil
 manifest = {
     "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -163,7 +167,7 @@ NB02 = [
 Input: the oracle dataset from notebook 01 (`oracle_labels.csv`, `query_emb.npy`). Either run this in the same session after notebook 01, or attach notebook 01's output with **Add Input → Notebook output**.
 
 **What is compared (test split only, never used for training or model selection):**
-- fixed policies: always agent A / B / C / D, random, majority label, and the oracle (upper bound)
+- fixed policies: always one agent (each of the five), random, majority label, and the oracle (upper bound)
 - learned baselines on the same 768-d embeddings: cosine kNN, logistic regression
 - the neural router, two objectives: *oracle* (softmax over agents) and *correctness* (P(correct) per agent), plus a no-gate ablation
 - 5 seeds per neural model; 95% bootstrap CIs; exact McNemar tests; calibration (ECE)
@@ -288,7 +292,7 @@ for k, a in enumerate(ORDER):
     ax.annotate(a, (m["gflops"], m["accuracy"]), textcoords="offset points", xytext=(5, -10), fontsize=8)
 m = ev.policy_metrics(y[te], C[te], FL[te])
 ax.scatter(m["gflops"], m["accuracy"], marker="*", s=160, color="k", zorder=4, label="oracle router")
-ax.set_xlabel("mean GFLOPs per query"); ax.set_ylabel("answer accuracy (F1 >= 0.5)")
+ax.set_xlabel("mean GFLOPs per query"); ax.set_ylabel("answer accuracy (correct)")
 ax.set_title("Accuracy vs compute on the test split"); ax.legend(fontsize=7, loc="lower right"); ax.grid(alpha=.3)
 fig.tight_layout(); fig.savefig(work / "pareto_test.png", dpi=200); plt.show()
 print("normalised area under the accuracy-cost front (mean ± std over seeds):")

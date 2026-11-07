@@ -5,7 +5,7 @@ answer plus the exact resources it consumed (LLM calls, prompt/generated
 tokens, retrieval calls, wall time). Those measurements become the cost side
 of the router's accuracy/cost trade-off.
 
-Strategies, in increasing cost:
+Strategies:
   * ``direct``        - no retrieval; parametric knowledge only.
   * ``single_rag``    - retrieve once with the question, answer once.
   * ``iterative_rag`` - interleave reasoning and retrieval: at each step the
@@ -25,6 +25,7 @@ from . import prompts
 from .config import AgentSpec
 from .data import Passage, Question
 from .llm import ChatLLM, Generation
+from .metrics import normalize_answer
 from .retrieval import DenseRetriever
 
 EncodeFn = Callable[[List[str]], np.ndarray]
@@ -122,35 +123,54 @@ class Agent:
         return results
 
     def _iterative(self, questions: List[Question]) -> List[AgentResult]:
+        """Up to ``max_steps`` rounds. A round either answers or searches; a
+        repeated search query brings no new evidence, so that question is
+        made to answer in its next round instead of searching again."""
         results = [self._new(q) for q in questions]
         hits = self._retrieve([q.question for q in questions], results)
         ctx: Dict[int, List[Passage]] = {i: list(h) for i, h in enumerate(hits)}
+        # The question itself was the first search, so it counts as already tried.
+        queries: Dict[int, List[str]] = {i: [q.question] for i, q in enumerate(questions)}
+        force_answer: set = set()
         active = list(range(len(questions)))
         for step in range(1, self.spec.max_steps + 1):
             if not active:
                 break
             last = step == self.spec.max_steps
-            builder = prompts.rag_prompt if last else prompts.step_prompt
-            gens = self._generate(
-                [builder(questions[i].question, ctx[i][: self.spec.max_passages], self.max_words) for i in active],
-                self.answer_tokens if last else self.step_tokens,
-            )
+            prompts_ = []
+            for i in active:
+                passages = ctx[i][: self.spec.max_passages]
+                if last or i in force_answer:
+                    prompts_.append(prompts.rag_prompt(questions[i].question, passages, self.max_words))
+                else:
+                    prompts_.append(
+                        prompts.step_prompt(questions[i].question, passages, self.max_words, queries[i])
+                    )
+            gens = self._generate(prompts_, self.step_tokens)
             searches: List[tuple] = []
+            newly_forced: List[int] = []
             for i, g in zip(active, gens):
                 r = results[i]
                 r.add(g, self.llm.n_params)
                 r.trace.append(g.text)
-                kind, payload = ("answer", prompts.parse_answer(g.text)) if last else prompts.parse_step(g.text)
+                if last or i in force_answer:
+                    r.prediction = prompts.parse_answer(g.text)
+                    continue
+                kind, payload = prompts.parse_step(g.text)
                 if kind == "answer":
                     r.prediction = payload or ""
+                elif normalize_answer(payload) in {normalize_answer(q) for q in queries[i]}:
+                    force_answer.add(i)
+                    newly_forced.append(i)
                 else:
+                    queries[i].append(payload)
                     searches.append((i, payload))
             if searches:
-                new_hits = self._retrieve([s for _, s in searches], [results[i] for i, _ in searches])
+                new_hits = self._retrieve([q for _, q in searches], [results[i] for i, _ in searches])
                 for (i, _), h in zip(searches, new_hits):
                     have = {p.pid for p in ctx[i]}
                     ctx[i].extend(p for p in h if p.pid not in have)
-            active = [i for i, _ in searches]
+            active = sorted([i for i, _ in searches] + newly_forced)
         for i, r in enumerate(results):
             r.retrieved_pids = [p.pid for p in ctx[i][: self.spec.max_passages]]
         return results
