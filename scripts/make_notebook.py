@@ -22,7 +22,7 @@ Retrieval: `intfloat/multilingual-e5-base` (768-d) over one pooled corpus.
 Questions: NQ-Open, SQuAD v1.1, HotpotQA (distractor), MuSiQue-Ans (validation splits).
 
 **Kaggle settings:** Accelerator = *GPU T4 x2*, Internet = *On*.
-Run with `RUN_MODE = "smoke"` first (~15 min), then switch to `"full"`. The run is resumable: if the session stops, run all cells again and finished questions are skipped."""),
+Run with `RUN_MODE = "smoke"` first (~15 min), then switch to `"full"` (2,000 questions, about 9 hours on a T4) and start it with **Save Version → Save & Run All (Commit)** so it runs in the background within Kaggle's 12-hour limit. Within one session the run is resumable: running all cells again skips finished questions. `/kaggle/working` is not kept between sessions."""),
     ("code", """import os, sys, subprocess, json, time, platform
 from pathlib import Path
 
@@ -45,7 +45,7 @@ COMMIT = subprocess.run(["git", "-C", str(REPO_DIR), "rev-parse", "--short", "HE
 print("repo commit", COMMIT)"""),
     ("code", """from agentic_rag_router.config import PipelineConfig
 
-RUN_MODE = "smoke"   # "smoke" -> 10 questions per dataset; "full" -> 600 per dataset
+RUN_MODE = "smoke"   # "smoke" -> 10 questions per dataset; "full" -> 500 per dataset
 
 cfg = PipelineConfig.smoke() if RUN_MODE == "smoke" else PipelineConfig()
 OUT = Path("/kaggle/working" if Path("/kaggle").exists() else ".") / f"oracle_{RUN_MODE}"

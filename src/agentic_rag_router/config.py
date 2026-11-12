@@ -55,7 +55,7 @@ class PipelineConfig:
     seed: int = 42
     # Questions sampled per source dataset (validation splits).
     n_per_dataset: Dict[str, int] = field(
-        default_factory=lambda: {"nq_open": 600, "squad": 600, "hotpotqa": 600, "musique": 600}
+        default_factory=lambda: {"nq_open": 500, "squad": 500, "hotpotqa": 500, "musique": 500}
     )
     agents: List[AgentSpec] = field(default_factory=lambda: list(DEFAULT_AGENTS))
     embedding_model: str = EMBEDDING_MODEL
