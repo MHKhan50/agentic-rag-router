@@ -8,9 +8,9 @@ This project learns a router that reads a query and sends it to the
 *cheapest agent that can still answer it correctly*, and measures that
 trade-off with real models, real benchmarks and full cost accounting.
 
-> **Status:** research in progress. Stage 1 (oracle dataset construction) is
-> implemented and tested. Router training, baselines and results come next;
-> no performance claims are made until they are measured.
+> **Status:** research in progress. The oracle dataset pipeline, router training,
+> baselines and statistical evaluation are implemented and tested on CPU. The
+> full GPU run has not been done yet, so no results are reported.
 
 ## Research question
 
