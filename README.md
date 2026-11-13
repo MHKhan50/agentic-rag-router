@@ -94,7 +94,7 @@ tests/test_core.py
 **Kaggle (recommended).** Import `notebooks/01_build_oracle_dataset.ipynb`
 from this repository, set *Accelerator: GPU T4 x2* and *Internet: On*, run
 with `RUN_MODE = "smoke"`, check the tables, then set `RUN_MODE = "full"`.
-The full run (2,000 questions) takes about 9 hours on a T4, so start it with *Save Version → Save & Run All (Commit)*. Finished questions are skipped if the cells are re-run within the same session; `/kaggle/working` is not kept between sessions. Then run
+The full run (2,000 questions) needs about 13–18 GPU hours on T4 x2, so it spans two Kaggle sessions. Start it with *Save Version → Save & Run All (Commit)*. After 11 hours the pipeline saves its work and stops with a `TimeBudgetReached` message; attach that version's output as an input (*Add Input → Your Work*) and run it again, and it continues where it stopped. The 7B model is spread over both GPUs with at most 60% of each GPU's memory used for weights, and a batch that still runs out of memory is retried as two half batches. Then run
 `notebooks/02_train_router.ipynb` in the same session (or attach notebook 01's
 output as an input) to train the router and all baselines.
 

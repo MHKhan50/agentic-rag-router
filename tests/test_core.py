@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from agentic_rag_router.data import (  # noqa: E402
 from agentic_rag_router.llm import Generation  # noqa: E402
 from agentic_rag_router.metrics import score  # noqa: E402
 from agentic_rag_router.oracle import assign_splits, build_oracle, score_runs, summarise  # noqa: E402
-from agentic_rag_router.pipeline import run_agents  # noqa: E402
+from agentic_rag_router.pipeline import TimeBudgetReached, read_jsonl, run_agents  # noqa: E402
 from agentic_rag_router.retrieval import DenseRetriever  # noqa: E402
 
 # Rows mirror the published Hugging Face schemas of each dataset.
@@ -259,6 +260,38 @@ def test_pipeline_oracle_and_resume(tmp_path):
 
     again = run_agents(questions, cfg, retriever, encode, tmp_path, llm_factory=boom, log=lambda s: None)
     assert {k: len(v) for k, v in again.items()} == {"cheap": 10, "rich": 10}
+
+
+
+def test_pipeline_resumes_from_earlier_session_and_stops_on_budget(tmp_path):
+    questions = [parse_hotpotqa({**HOTPOT_ROW, "id": f"h{i}"}, i) for i in range(10)]
+    _, retriever, encode = _fake_world()
+    cfg = PipelineConfig(agents=[AgentSpec("cheap", "small", "direct"), AgentSpec("rich", "big", "direct")])
+    calls = []
+
+    def factory(model_id):
+        calls.append(model_id)
+        return FakeLLM(lambda m: "Answer: Stratford-upon-Avon")
+
+    # Session 1 finished the first agent and 6 of 10 questions for the second.
+    first = tmp_path / "session1"
+    run_agents(questions, cfg, retriever, encode, first, llm_factory=factory, chunk_size=4, log=lambda s: None)
+    rich = read_jsonl(first / "runs" / "rich.jsonl")
+    (first / "runs" / "rich.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rich[:6]))
+
+    # Session 2: a fresh working directory, with session 1's output attached as an input.
+    second = tmp_path / "session2"
+    calls.clear()
+    runs = run_agents(questions, cfg, retriever, encode, second, llm_factory=factory, chunk_size=4,
+                      log=lambda s: None, previous_runs_root=tmp_path / "session1")
+    assert calls == ["big"]  # the first agent was complete, so only the second model loaded
+    assert {k: len(v) for k, v in runs.items()} == {"cheap": 10, "rich": 10}
+
+    # A zero budget stops before any batch and says what is left.
+    third = tmp_path / "session3"
+    with pytest.raises(TimeBudgetReached, match="Still to do"):
+        run_agents(questions, cfg, retriever, encode, third, llm_factory=factory, chunk_size=4,
+                   log=lambda s: None, time_budget_s=0)
 
 
 # ---------------------------------------------------------------- evaluation + baselines
