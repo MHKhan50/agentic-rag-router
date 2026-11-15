@@ -8,9 +8,17 @@ This project learns a router that reads a query and sends it to the
 *cheapest agent that can still answer it correctly*, and measures that
 trade-off with real models, real benchmarks and full cost accounting.
 
-> **Status:** research in progress. The full oracle dataset (2,000 questions, five agents) and the
-> router training run (notebook 02) are done; their results are being written up. Notebook 03 tests
-> answer-level cascades on the same saved answers.
+> **Status:** the oracle dataset (2,000 questions, five agents), router training and answer-level
+> cascades are done. Paper: [`paper/main.pdf`](paper/main.pdf); saved results: [`results/`](results/).
+
+## Main result
+
+On the 300 test questions an oracle that picks the cheapest correct agent reaches 61.0% accuracy at 61% of
+the strongest agent's compute (strongest agent alone: 45.7%). A gated neural router, logistic regression and
+kNN over question embeddings stay within 1.5 points of a fixed mix of agents at the same compute, and
+answer-level cascades do no better: the best matches the strongest agent's accuracy at 110% of its compute.
+Even a cascade that knew exactly when the small RAG agent is right would reach only 50.0%; the other 11 points
+come from questions that only agents A, B or D answer.
 
 ## Research question
 

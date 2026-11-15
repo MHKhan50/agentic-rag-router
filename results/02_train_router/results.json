@@ -1,0 +1,153 @@
+{
+  "mean_accuracy_shared_range": {
+    "kNN (k=15)": [
+      0.457356608478803,
+      0.0
+    ],
+    "logistic regression": [
+      0.447024106400665,
+      0.0
+    ],
+    "kNN (k=15), correctness": [
+      0.44865336658354105,
+      0.0
+    ],
+    "logistic regression, correctness": [
+      0.4469077306733167,
+      0.0
+    ],
+    "router: oracle": [
+      0.450091438071488,
+      0.0014422313572412411
+    ],
+    "router: correctness": [
+      0.45639235245220283,
+      0.002269360176843726
+    ],
+    "router: oracle, no gate (ablation)": [
+      0.45175561097256856,
+      0.004593956937106875
+    ],
+    "fixed-agent mix (no router)": [
+      0.4521879802725371,
+      0.0
+    ]
+  },
+  "shared_range_gflops": [
+    15608.151033408854,
+    17636.295489266347
+  ],
+  "fixed_mix_frontier": [
+    [
+      246.30476291754667,
+      0.14
+    ],
+    [
+      2352.8470107272533,
+      0.36
+    ],
+    [
+      11598.380864669014,
+      0.43
+    ],
+    [
+      17636.295489266347,
+      0.45666666666666667
+    ]
+  ],
+  "tau_star": {
+    "kNN (k=15)": [
+      0.42500000000000004
+    ],
+    "logistic regression": [
+      0.325
+    ],
+    "kNN (k=15), correctness": [
+      0.6000000000000001
+    ],
+    "logistic regression, correctness": [
+      0.6000000000000001
+    ],
+    "router: oracle": [
+      0.0,
+      0.4,
+      0.55,
+      0.45,
+      0.45
+    ],
+    "router: correctness": [
+      0.5750000000000001,
+      0.75,
+      0.775,
+      0.5750000000000001,
+      0.8
+    ],
+    "router: oracle, no gate (ablation)": [
+      0.275,
+      0.42500000000000004,
+      0.5,
+      0.325,
+      0.45
+    ]
+  },
+  "mcnemar": {
+    "router: oracle @ tau* vs always E_iterative_large": {
+      "a_only": 10,
+      "b_only": 16,
+      "p_value": 0.32693958282470703
+    },
+    "router: oracle @ tau* vs logistic regression, correctness (default)": {
+      "a_only": 10,
+      "b_only": 12,
+      "p_value": 0.8318119049072266
+    },
+    "router: oracle @ tau* vs kNN (k=15), correctness (default)": {
+      "a_only": 14,
+      "b_only": 15,
+      "p_value": 1.0
+    },
+    "router: correctness @ tau* vs always E_iterative_large": {
+      "a_only": 4,
+      "b_only": 7,
+      "p_value": 0.548828125
+    },
+    "router: correctness @ tau* vs logistic regression, correctness (default)": {
+      "a_only": 9,
+      "b_only": 8,
+      "p_value": 1.0
+    },
+    "router: correctness @ tau* vs kNN (k=15), correctness (default)": {
+      "a_only": 9,
+      "b_only": 7,
+      "p_value": 0.803619384765625
+    },
+    "router: correctness (default) vs always E_iterative_large": {
+      "a_only": 11,
+      "b_only": 15,
+      "p_value": 0.557197093963623
+    },
+    "router: correctness (default) vs logistic regression, correctness (default)": {
+      "a_only": 9,
+      "b_only": 9,
+      "p_value": 1.0
+    },
+    "router: correctness (default) vs kNN (k=15), correctness (default)": {
+      "a_only": 13,
+      "b_only": 12,
+      "p_value": 1.0
+    }
+  },
+  "ece_correctness": [
+    0.03020545683304468,
+    0.038294391850630424,
+    0.060931797489523896,
+    0.038066994339227674,
+    0.03772527882456779
+  ],
+  "splits": {
+    "train": 1400,
+    "val": 300,
+    "test": 300
+  },
+  "data_dir": "/kaggle/input/notebooks/muzammalhussain11/agentic-rag-router-oracle-dataset/oracle_full"
+}

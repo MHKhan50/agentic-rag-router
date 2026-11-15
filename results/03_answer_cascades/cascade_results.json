@@ -1,0 +1,87 @@
+{
+  "tau_star": {
+    "agreement rule (A+C, else E)": 0.0250025,
+    "learned, A+C signals (else E)": 0.650065,
+    "learned, C signals only (else E)": 0.650065,
+    "learned, A+C signals (else D)": 0.80008,
+    "perfect accept (upper bound)": 0.0250025,
+    "question-only logistic regression": 0.6000000000000001
+  },
+  "shared_range_gflops": [
+    2599.1517736448,
+    17636.295489266347
+  ],
+  "mean_accuracy_shared_range": {
+    "agreement rule (A+C, else E)": 0.36418952618453865,
+    "learned, A+C signals (else E)": 0.39211138819617625,
+    "learned, C signals only (else E)": 0.3893100581878637,
+    "learned, A+C signals (else D)": 0.3993599334995843,
+    "question-only logistic regression": 0.4183956774729842,
+    "fixed-agent mix (no router)": 0.414951214997055
+  },
+  "largest_gain_over_fixed_mix": {
+    "agreement rule (A+C, else E)": 0.0,
+    "learned, A+C signals (else E)": 0.006666666666666654,
+    "learned, C signals only (else E)": 0.0001855072786935974,
+    "learned, A+C signals (else D)": -0.0007087189222877432,
+    "question-only logistic regression": 0.016320293550520837
+  },
+  "by_dataset": [
+    {
+      "index": "hotpotqa",
+      "cascade_acc": 0.64,
+      "always_E_iterative_large_acc": 0.627,
+      "escalation_rate": 0.8,
+      "cost_vs_strongest": 1.01,
+      "questions": 75
+    },
+    {
+      "index": "musique",
+      "cascade_acc": 0.227,
+      "always_E_iterative_large_acc": 0.227,
+      "escalation_rate": 0.947,
+      "cost_vs_strongest": 1.084,
+      "questions": 75
+    },
+    {
+      "index": "nq_open",
+      "cascade_acc": 0.173,
+      "always_E_iterative_large_acc": 0.173,
+      "escalation_rate": 1.0,
+      "cost_vs_strongest": 1.149,
+      "questions": 75
+    },
+    {
+      "index": "squad",
+      "cascade_acc": 0.8,
+      "always_E_iterative_large_acc": 0.8,
+      "escalation_rate": 0.933,
+      "cost_vs_strongest": 1.178,
+      "questions": 75
+    }
+  ],
+  "features": {
+    "A+C": [
+      "len__A_direct_small",
+      "len__C_rag_small",
+      "refusal__A_direct_small",
+      "refusal__C_rag_small",
+      "agree_f1__A_direct_small__C_rag_small",
+      "agree_em__A_direct_small__C_rag_small",
+      "retr_top__C_rag_small"
+    ],
+    "C": [
+      "len__C_rag_small",
+      "refusal__C_rag_small",
+      "retr_top__C_rag_small"
+    ]
+  },
+  "splits": {
+    "train": 1400,
+    "val": 300,
+    "test": 300
+  },
+  "data_commit": "f4a846a",
+  "code_commit": "63c1b3b",
+  "data_dir": "/kaggle/input/notebooks/muzammalhussain11/agentic-rag-router-oracle-dataset/oracle_full"
+}
