@@ -46,3 +46,37 @@ def fit_logistic_regression(X_train, y_train, k_agents: int, C: float = 1.0, see
         return out
 
     return proba
+
+
+def knn_correctness(X_train: np.ndarray, C_train: np.ndarray, X: np.ndarray, k: int = 15) -> np.ndarray:
+    """Per-agent P(correct): the share of the k most similar training queries
+    (cosine) that each agent answered correctly. Same output as the
+    correctness router, so it is scored with the same policy."""
+    A = X_train / np.linalg.norm(X_train, axis=1, keepdims=True)
+    B = X / np.linalg.norm(X, axis=1, keepdims=True)
+    sims = B @ A.T
+    k = min(k, len(X_train))
+    nn = np.argpartition(-sims, k - 1, axis=1)[:, :k]
+    return C_train[nn].mean(axis=1).astype(float)
+
+
+def fit_logistic_correctness(X_train: np.ndarray, C_train: np.ndarray, C: float = 1.0, seed: int = 0):
+    """One binary logistic regression per agent for P(agent answers correctly);
+    returns ``proba(X)`` with shape (n, agents)."""
+    from sklearn.linear_model import LogisticRegression
+
+    models = []
+    for j in range(C_train.shape[1]):
+        yj = C_train[:, j]
+        if yj.min() == yj.max():
+            models.append(float(yj[0]))
+        else:
+            models.append(LogisticRegression(C=C, max_iter=2000, random_state=seed).fit(X_train, yj))
+
+    def proba(X: np.ndarray) -> np.ndarray:
+        out = np.zeros((len(X), len(models)))
+        for j, m in enumerate(models):
+            out[:, j] = m if isinstance(m, float) else m.predict_proba(X)[:, 1]
+        return out
+
+    return proba

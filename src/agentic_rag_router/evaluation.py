@@ -112,3 +112,56 @@ def expected_calibration_error(probs: np.ndarray, outcomes: np.ndarray, n_bins: 
         if m.any():
             ece += m.mean() * abs(probs[m].mean() - outcomes[m].mean())
     return float(ece)
+
+
+def fixed_mix_frontier(correct: np.ndarray, flops: np.ndarray) -> List[Tuple[float, float]]:
+    """Upper concave hull of the fixed single-agent policies in (gflops, accuracy).
+
+    Any point on a segment between two fixed agents is reachable without a
+    router, by sending a random share of the questions to each agent. A router
+    is only useful where it is above this frontier at the same compute."""
+    pts = sorted((float(flops[:, k].mean() / 1e9), float(correct[:, k].mean())) for k in range(correct.shape[1]))
+    hull: List[Tuple[float, float]] = []
+    for p in pts:
+        if hull and p[1] <= hull[-1][1]:
+            continue  # dearer and not better: never on the frontier
+        while len(hull) >= 2:
+            (x1, y1), (x2, y2) = hull[-2], hull[-1]
+            if (y2 - y1) * (p[0] - x1) <= (p[1] - y1) * (x2 - x1):
+                hull.pop()  # hull[-1] lies on or below the chord: drop it
+            else:
+                break
+        hull.append(p)
+    return hull
+
+
+def frontier_accuracy(hull: Sequence[Tuple[float, float]], cost: float) -> float:
+    """Accuracy of the fixed-agent mix at ``cost`` (linear between hull points;
+    the cheapest agent's accuracy below it, the best agent's above it)."""
+    if cost <= hull[0][0]:
+        return float(hull[0][1])
+    for (x1, y1), (x2, y2) in zip(hull, hull[1:]):
+        if cost <= x2:
+            return float(y1 + (y2 - y1) * (cost - x1) / (x2 - x1))
+    return float(hull[-1][1])
+
+
+def area_on_range(points: Sequence[Tuple[float, float]], lo: float, hi: float) -> float:
+    """Mean accuracy of a step Pareto front over the compute range [lo, hi].
+
+    Below the front's cheapest point the policy is credited with the cheapest
+    point's accuracy only if that point is inside the range; the range should be
+    chosen so that every compared curve covers it."""
+    front = pareto_front(points)
+    grid = np.linspace(lo, hi, 401)
+    vals = []
+    for c in grid:
+        ok = [a for cost, a in front if cost <= c + 1e-9]
+        vals.append(max(ok) if ok else np.nan)
+    return float(np.nanmean(vals)) if not np.all(np.isnan(vals)) else float("nan")
+
+
+def frontier_area_on_range(hull: Sequence[Tuple[float, float]], lo: float, hi: float) -> float:
+    """Mean accuracy of the fixed-agent mix over [lo, hi]."""
+    grid = np.linspace(lo, hi, 401)
+    return float(np.mean([frontier_accuracy(hull, c) for c in grid]))

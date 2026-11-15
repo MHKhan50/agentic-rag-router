@@ -170,7 +170,8 @@ Input: the oracle dataset from notebook 01 (`oracle_labels.csv`, `query_emb.npy`
 
 **What is compared (test split only, never used for training or model selection):**
 - fixed policies: always one agent (each of the five), random, majority label, and the oracle (upper bound)
-- learned baselines on the same 768-d embeddings: cosine kNN, logistic regression
+- learned baselines on the same 768-d embeddings: cosine kNN and logistic regression, each trained both on the oracle label and on per-agent correctness
+- the fixed-agent mix: the best accuracy reachable at each compute by sending a fixed share of questions to each agent, with no router
 - the neural router, two objectives: *oracle* (softmax over agents) and *correctness* (P(correct) per agent), plus a no-gate ablation
 - 5 seeds per neural model; 95% bootstrap CIs; exact McNemar tests; calibration (ECE)
 
@@ -217,6 +218,10 @@ choices["oracle (upper bound)"] = [y[te]]
 probs["kNN (k=15)"] = [(bl.knn_proba(X[tr], y[tr], X[va], K), bl.knn_proba(X[tr], y[tr], X[te], K))]
 lr = bl.fit_logistic_regression(X[tr], y[tr], K)
 probs["logistic regression"] = [(lr(X[va]), lr(X[te]))]
+# Same task as the correctness router (per-agent P(correct)), so all three are scored with the same policy.
+probs["kNN (k=15), correctness"] = [(bl.knn_correctness(X[tr], C[tr], X[va]), bl.knn_correctness(X[tr], C[tr], X[te]))]
+lrc = bl.fit_logistic_correctness(X[tr], C[tr])
+probs["logistic regression, correctness"] = [(lrc(X[va]), lrc(X[te]))]
 print("baselines ready")"""),
     ("code", """from agentic_rag_router.train import TrainConfig, train_router, predict
 
@@ -256,9 +261,11 @@ for name, runs in probs.items():
     tau_star[name] = taus
     choices[f"{name} @ tau*"] = [fn(pt, t) for (_, pt), t in zip(runs, taus)]
 
+FIXED_MIX = ev.fixed_mix_frontier(C[te], FL[te])   # best accuracy reachable at each compute without a router
 rows = []
 for name, cs in choices.items():
     ms = [ev.policy_metrics(c, C[te], FL[te], y[te]) for c in cs]
+    gf = np.mean([m["gflops"] for m in ms])
     acc = np.array([m["accuracy"] for m in ms])
     lo, hi = ev.bootstrap_ci(C[te][np.arange(len(te)), cs[0]].astype(float))
     rows.append({
@@ -267,45 +274,54 @@ for name, cs in choices.items():
         "gflops/query": np.mean([m["gflops"] for m in ms]),
         "cost_vs_strongest": np.mean([m["cost_vs_strongest"] for m in ms]),
         "routing_acc": np.mean([m["routing_accuracy"] for m in ms]),
+        "fixed_mix_acc_same_cost": ev.frontier_accuracy(FIXED_MIX, gf),
+        "gain_vs_fixed_mix": acc.mean() - ev.frontier_accuracy(FIXED_MIX, gf),
     })
 results = pd.DataFrame(rows).set_index("policy").round(4)
-print("Test split. CI = 95% bootstrap over questions (seed 0). cost_vs_strongest = compute relative to always using the strongest agent.")
+print("Test split. CI = 95% bootstrap over questions (seed 0). cost_vs_strongest = compute relative to always using the strongest agent.")\nprint("gain_vs_fixed_mix = accuracy minus the best accuracy reachable at the same compute by mixing fixed agents (no router).")
 display(results)
 print("tau* chosen on validation:", {k: [round(t, 3) for t in v] for k, v in tau_star.items()})"""),
     ("code", """import matplotlib.pyplot as plt
 
+# Every learned policy is swept over its threshold. Curves are compared only on the compute range that all of
+# them (and the fixed-agent mix) cover, so no curve is credited or penalised for a range it cannot reach.
 max_cost = FL[te][:, -1].mean() / 1e9
-curves, auc = {}, {}
-for name, runs in probs.items():
-    per_seed = []
-    for _, pt in runs:
-        pts = ev.sweep(policy_fn(name), pt, C[te], FL[te], TAUS)
-        per_seed.append(ev.area_under_curve([(c, a) for _, c, a in pts], max_cost))
-    curves[name] = ev.pareto_front([(c, a) for _, c, a in ev.sweep(policy_fn(name), runs[0][1], C[te], FL[te], TAUS)])
-    auc[name] = (float(np.mean(per_seed)), float(np.std(per_seed)))
+sweeps = {name: [[(c, a) for _, c, a in ev.sweep(policy_fn(name), pt, C[te], FL[te], TAUS)] for _, pt in runs]
+          for name, runs in probs.items()}
+lo = max([FIXED_MIX[0][0]] + [min(c for c, _ in pts) for runs in sweeps.values() for pts in runs])
+hi = max_cost
+area = {name: (float(np.mean([ev.area_on_range(p, lo, hi) for p in runs])),
+               float(np.std([ev.area_on_range(p, lo, hi) for p in runs]))) for name, runs in sweeps.items()}
+area["fixed-agent mix (no router)"] = (ev.frontier_area_on_range(FIXED_MIX, lo, hi), 0.0)
+print(f"mean accuracy over the shared compute range {lo:.0f}-{hi:.0f} GFLOPs (mean ± std over seeds):")
+display(pd.Series({k: f"{m:.4f} ± {s:.4f}" for k, (m, s) in sorted(area.items(), key=lambda kv: -kv[1][0])}, name="mean accuracy"))
 
+BLUE, YELLOW, RED, GREEN, GREY = "#1F4E9C", "#E3A800", "#C8102E", "#5FA65A", "#7f7f7f"
+show = {"router: correctness": BLUE, "kNN (k=15), correctness": YELLOW,
+        "logistic regression, correctness": RED, "router: oracle": GREY}
 fig, ax = plt.subplots(figsize=(7.5, 5))
-for name, front in curves.items():
-    cs, accs = zip(*front)
-    ax.step(cs, accs, where="post", label=f"{name}  (AUC {auc[name][0]:.3f})")
+xs, ys = zip(*FIXED_MIX)
+ax.plot(xs, ys, "--", color=GREEN, lw=2, label="fixed-agent mix (no router)")
+for name, col in show.items():
+    cs, accs = zip(*ev.pareto_front(sweeps[name][0]))
+    ax.step(cs, accs, where="post", color=col, lw=2, label=name)
 for k, a in enumerate(ORDER):
     m = ev.policy_metrics(bl.fixed(len(te), k), C[te], FL[te])
-    ax.scatter(m["gflops"], m["accuracy"], marker="s", s=40, zorder=3)
+    ax.scatter(m["gflops"], m["accuracy"], marker="s", s=36, color="black", zorder=3)
     ax.annotate(a, (m["gflops"], m["accuracy"]), textcoords="offset points", xytext=(5, -10), fontsize=8)
 m = ev.policy_metrics(y[te], C[te], FL[te])
-ax.scatter(m["gflops"], m["accuracy"], marker="*", s=160, color="k", zorder=4, label="oracle router")
+ax.scatter(m["gflops"], m["accuracy"], marker="*", s=160, color="black", zorder=4, label="oracle router (upper bound)")
+ax.axvspan(lo, hi, color=GREEN, alpha=0.06)
 ax.set_xlabel("mean GFLOPs per query"); ax.set_ylabel("answer accuracy (correct)")
 ax.set_title("Accuracy vs compute on the test split"); ax.legend(fontsize=7, loc="lower right"); ax.grid(alpha=.3)
-fig.tight_layout(); fig.savefig(work / "pareto_test.png", dpi=200); plt.show()
-print("normalised area under the accuracy-cost front (mean ± std over seeds):")
-print({k: f"{m:.4f} ± {s:.4f}" for k, (m, s) in auc.items()})"""),
+fig.tight_layout(); fig.savefig(work / "pareto_test.png", dpi=200); plt.show()"""),
     ("code", """def hits(policy, seed=0):
     return C[te][np.arange(len(te)), choices[policy][seed]]
 
 strongest = f"always {ORDER[-1]}"
 tests = {}
-for name in ["router: oracle @ tau*", "router: correctness @ tau*"]:
-    for ref in [strongest, "logistic regression @ tau*", "kNN (k=15) @ tau*"]:
+for name in ["router: oracle @ tau*", "router: correctness @ tau*", "router: correctness (default)"]:
+    for ref in [strongest, "logistic regression, correctness (default)", "kNN (k=15), correctness (default)"]:
         tests[f"{name} vs {ref}"] = ev.mcnemar_exact(hits(name), hits(ref))
 display(pd.DataFrame(tests).T)
 
@@ -317,7 +333,8 @@ best = None
 for name in ["router: oracle", "router: correctness"]:
     for s, ((pv, _), (model, _)) in enumerate(zip(probs[name], models[name])):
         pts = ev.sweep(policy_fn(name), pv, C[va], FL[va], TAUS)
-        a = ev.area_under_curve([(c, acc) for _, c, acc in pts], FL[va][:, -1].mean() / 1e9)
+        vmix = ev.fixed_mix_frontier(C[va], FL[va])
+        a = ev.area_on_range([(c, acc) for _, c, acc in pts], max(vmix[0][0], min(c for _, c, _ in pts)), FL[va][:, -1].mean() / 1e9)
         if best is None or a > best[0]:
             best = (a, name, s, model)
 val_auc, name, seed, model = best
@@ -331,19 +348,20 @@ torch.save(model.state_dict(), EXPORT / "router.pt")
     "d_model": int(X.shape[1]), "num_agents": K,
     "train_config": tc.to_dict(), "seed": seed,
     "policy": "cheapest_confident" if tc.objective == "correctness" else "confidence_escalation",
-    "tau": tau_star[name][seed], "val_auc": val_auc,
+    "tau": tau_star[name][seed], "val_mean_accuracy_over_range": val_auc,
     "data_commit": data_manifest["repo_commit"], "code_commit": COMMIT,
 }, indent=2))
 results.to_csv(work / "results_test.csv")
 (work / "results.json").write_text(json.dumps({
-    "auc": auc, "tau_star": tau_star, "mcnemar": tests, "ece_correctness": ece,
+    "mean_accuracy_shared_range": area, "shared_range_gflops": [lo, hi], "fixed_mix_frontier": FIXED_MIX, "tau_star": tau_star, "mcnemar": tests, "ece_correctness": ece,
     "splits": {k: int(len(v)) for k, v in S.items()}, "data_dir": str(DATA_DIR),
 }, indent=2, default=float))
-print(f"exported {name} (seed {seed}, val AUC {val_auc:.4f}) ->", EXPORT)"""),
+print(f"exported {name} (seed {seed}, validation mean accuracy over range {val_auc:.4f}) ->", EXPORT)"""),
     ("markdown", """### Reading the results
-- **accuracy / gflops** of `router … @ tau*` against `always <strongest>` is the headline: same accuracy (within 1 point, by construction on validation) at what fraction of the compute?
+- **gain_vs_fixed_mix** is the headline: how much more accurate is a policy than simply sending a fixed share of questions to each agent at the same compute? A router earns its place only where this is clearly above zero.
+- **accuracy / gflops** of `router … @ tau*` against `always <strongest>`: same accuracy (within 1 point, by construction on validation) at what fraction of the compute?
 - The **oracle** row is the ceiling; the gap between the router and the oracle is the room left for better routing.
-- A router is only useful if it beats **logistic regression and kNN** on the same features; McNemar p < 0.05 says the accuracy difference is unlikely to be chance.
+- A router is only useful if it beats **logistic regression and kNN** trained for the same task on the same features; the shared-range mean accuracy compares whole curves fairly, and McNemar p < 0.05 says an accuracy difference at one operating point is unlikely to be chance.
 - **No-gate ablation** shows whether the feature gate earns its parameters.
 
 Outputs in `/kaggle/working`: `results_test.csv`, `results.json`, `pareto_test.png`, `router_release/` (weights + config for Hugging Face)."""),

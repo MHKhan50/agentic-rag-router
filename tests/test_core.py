@@ -334,3 +334,24 @@ def test_baselines_shapes_and_knn_vote():
     lr = baselines.fit_logistic_regression(X, y, k_agents=3)(X)
     assert lr.shape == (4, 3) and np.allclose(lr.sum(1), 1) and (lr[:, 1] == 0).all()
     assert baselines.majority_class(np.array([1, 1, 2]), 3, 3).tolist() == [1, 1, 1]
+
+
+def test_fixed_mix_frontier_and_ranges():
+    correct = np.array([[1, 0, 1], [0, 1, 1], [0, 0, 1], [0, 0, 0]])
+    flops = np.array([[1e9, 2e9, 4e9]] * 4, dtype=float)
+    hull = ev.fixed_mix_frontier(correct, flops)
+    # agents: (1, .25), (2, .25), (4, .75); agent 2 is dearer and no better than agent 1
+    assert hull == [(1.0, 0.25), (4.0, 0.75)]
+    assert ev.frontier_accuracy(hull, 2.5) == pytest.approx(0.5)
+    assert ev.frontier_accuracy(hull, 9.0) == pytest.approx(0.75)
+    assert ev.frontier_area_on_range(hull, 1.0, 4.0) == pytest.approx(0.5, abs=1e-3)
+    assert ev.area_on_range([(1.0, 0.3), (3.0, 0.8)], 1.0, 4.0) == pytest.approx((0.3 * 2 + 0.8 * 1) / 3, abs=0.01)
+
+
+def test_correctness_baselines():
+    X = np.array([[1, 0], [0.9, 0.1], [0, 1], [0.1, 0.9]], dtype=float)
+    C = np.array([[1, 1], [1, 0], [0, 1], [0, 1]])
+    p = baselines.knn_correctness(X, C, np.array([[1, 0.05]]), k=2)
+    assert p.tolist() == [[1.0, 0.5]]
+    q = baselines.fit_logistic_correctness(X, C)(X)
+    assert q.shape == (4, 2) and np.all((q >= 0) & (q <= 1))
