@@ -367,8 +367,209 @@ print(f"exported {name} (seed {seed}, validation mean accuracy over range {val_a
 Outputs in `/kaggle/working`: `results_test.csv`, `results.json`, `pareto_test.png`, `router_release/` (weights + config for Hugging Face)."""),
 ]
 
+NB03 = [
+    ("markdown", """# Agentic RAG Router — 03: Answer-level cascades
 
-def build(cells) -> dict:
+Notebook 02 showed that routers which see **only the question** (the neural router, kNN, logistic regression) stay within about one point of a fixed mix of agents, while the oracle reaches 0.61. This notebook asks whether looking at **cheap agents' answers** closes more of that gap.
+
+A cascade runs one or two cheap agents first, then keeps the small RAG agent's answer or escalates to a stronger agent. Every agent that runs is paid for. Signals (all available at inference time, no gold answers or gold passages):
+
+- agreement between `A_direct_small` and `C_rag_small` (token F1 and exact match after SQuAD normalisation)
+- answer length and a refusal flag ("unknown", "not mentioned", empty)
+- cosine similarity of the best passage retrieved by `C_rag_small`
+
+| Cascade | Runs first | Keeps | Escalates to | Score |
+|---|---|---|---|---|
+| agreement rule | A, C | C | E | A–C token F1 |
+| learned, A+C signals | A, C | C | E | logistic regression on all signals |
+| learned, C signals only | C | C | E | logistic regression on C's length, refusal, retrieval score |
+| learned, escalate to D | A, C | C | D | as the A+C model |
+| perfect accept (upper bound) | C | C | E | 1 if C is correct |
+
+τ* is chosen on the validation split with the notebook 02 rule (cheapest setting within 1 point of the strongest agent), then applied unchanged to the test split. The question-only logistic-regression router from notebook 02 is retrained here as the reference.
+
+No GPU needed (Internet On, to fetch the code): everything is computed from notebook 01's saved answers. **Input:** add notebook 01's output (*Add Input → Your Work → Agentic RAG Router – Oracle Dataset*)."""),
+    ("code", """import os, sys, subprocess, json, glob, platform
+from pathlib import Path
+
+REPO_URL = "https://github.com/MHKhan50/agentic-rag-router"
+REPO_DIR = Path("/kaggle/working/agentic-rag-router") if Path("/kaggle").exists() else Path("agentic-rag-router").resolve()
+if not REPO_DIR.exists():
+    subprocess.run(["git", "clone", "--depth", "1", REPO_URL, str(REPO_DIR)], check=True)
+else:
+    subprocess.run(["git", "-C", str(REPO_DIR), "pull", "--ff-only"], check=False)
+sys.path.insert(0, str(REPO_DIR / "src"))
+COMMIT = subprocess.run(["git", "-C", str(REPO_DIR), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+import numpy as np, pandas as pd, sklearn
+from agentic_rag_router import baselines as bl, evaluation as ev, cascade as cs
+print("python", platform.python_version(), "| sklearn", sklearn.__version__, "| repo commit", COMMIT)
+
+work = Path("/kaggle/working" if Path("/kaggle").exists() else ".")
+cands = sorted(glob.glob("/kaggle/input/**/oracle_labels.csv", recursive=True)) + sorted(str(p) for p in work.glob("oracle_*/oracle_labels.csv"))
+assert cands, "No oracle_labels.csv found: add notebook 01's output as an input."
+DATA_DIR = Path(([c for c in cands if "oracle_full" in c] or cands)[0]).parent
+print("using", DATA_DIR)
+
+oracle = pd.read_csv(DATA_DIR / "oracle_labels.csv")
+data_manifest = json.loads((DATA_DIR / "manifest.json").read_text())
+ORDER = data_manifest["agent_cost_order"]
+qids = json.loads((DATA_DIR / "query_emb_qids.json").read_text())
+emb = np.load(DATA_DIR / "query_emb.npy")
+pos = {q: i for i, q in enumerate(qids)}
+X = emb[[pos[q] for q in oracle["qid"]]].astype(np.float32)
+C = oracle[[f"correct__{a}" for a in ORDER]].to_numpy(dtype=int)
+FL = oracle[[f"flops__{a}" for a in ORDER]].to_numpy(dtype=float)
+S = {s: np.where(oracle["split"].to_numpy() == s)[0] for s in ["train", "val", "test"]}
+tr, va, te = S["train"], S["val"], S["test"]
+print({s: len(i) for s, i in S.items()}, "| agents (cheap -> strong):", ORDER)
+if len(tr) < 500:
+    print("WARNING: smoke-sized data. This run only checks the code path; the numbers are not results.")"""),
+    ("code", """A, B, Cr, D, E = ORDER   # A_direct_small, B_direct_large, C_rag_small, D_rag_large, E_iterative_large
+long = pd.read_csv(DATA_DIR / "agent_results_long.csv", keep_default_na=False)
+preds = cs.predictions_wide(long, oracle["qid"], ORDER)
+
+# Best-passage similarity for the single-retrieval agents (query and passage embeddings from notebook 01).
+corpus_pids = [json.loads(l)["pid"] for l in open(DATA_DIR / "corpus.jsonl", encoding="utf-8")]
+P = np.load(DATA_DIR / "passage_emb.npy")
+assert len(corpus_pids) == len(P), "corpus.jsonl and passage_emb.npy are not aligned"
+pid_index = {p: i for i, p in enumerate(corpus_pids)}
+retrieval = {}
+for agent in (Cr, D):
+    runs = {}
+    for l in open(DATA_DIR / "runs" / f"{agent}.jsonl", encoding="utf-8"):
+        r = json.loads(l)
+        runs[r["qid"]] = r.get("retrieved_pids", [])
+    retrieval[agent] = cs.top_retrieval_score(X, P, pid_index, [runs.get(q, []) for q in oracle["qid"]])
+F = cs.answer_signals(preds, retrieval)
+F["refusal__any_AC"] = np.maximum(F[f"refusal__{A}"], F[f"refusal__{Cr}"])
+print(F.shape, "signals; retrieval score missing for", int(np.isnan(F[f"retr_top__{Cr}"]).sum()), "questions")
+cC = ORDER.index(Cr)
+print("C_rag_small correct on train:", C[tr, cC].mean().round(3))
+display(pd.DataFrame({
+    "C correct when A and C agree (exact)": [C[tr, cC][F[f"agree_em__{A}__{Cr}"].to_numpy()[tr] == 1].mean()],
+    "C correct when they disagree": [C[tr, cC][F[f"agree_em__{A}__{Cr}"].to_numpy()[tr] == 0].mean()],
+    "share agreeing (train)": [F[f"agree_em__{A}__{Cr}"].to_numpy()[tr].mean()],
+}).round(3))"""),
+    ("code", """AC_FEATS = [f"len__{A}", f"len__{Cr}", f"refusal__{A}", f"refusal__{Cr}", f"agree_f1__{A}__{Cr}", f"agree_em__{A}__{Cr}", f"retr_top__{Cr}"]
+C_FEATS = [f"len__{Cr}", f"refusal__{Cr}", f"retr_top__{Cr}"]
+CASCADES = {
+    "agreement rule (A+C, else E)": cs.Cascade("agreement rule", (A, Cr), Cr, E),
+    "learned, A+C signals (else E)": cs.Cascade("learned A+C", (A, Cr), Cr, E, tuple(AC_FEATS)),
+    "learned, C signals only (else E)": cs.Cascade("learned C", (Cr,), Cr, E, tuple(C_FEATS)),
+    "learned, A+C signals (else D)": cs.Cascade("learned A+C to D", (A, Cr), Cr, D, tuple(AC_FEATS)),
+    "perfect accept (upper bound)": cs.Cascade("perfect accept", (Cr,), Cr, E),
+}
+scores = {}
+for name, c in CASCADES.items():
+    if name.startswith("agreement"):
+        s = F[f"agree_f1__{A}__{Cr}"].to_numpy()
+    elif name.startswith("perfect"):
+        s = C[:, cC].astype(float)
+    else:
+        f = cs.fit_accept_model(F.loc[:, list(c.features)].to_numpy()[tr], C[tr, cC], seed=0)
+        s = f(F.loc[:, list(c.features)].to_numpy())
+    scores[name] = s
+TAUS = np.linspace(0, 1.0001, 41)
+tau_star = {n: cs.pick_tau(c, scores[n][va], C[va], FL[va], ORDER, TAUS) for n, c in CASCADES.items()}
+print("tau* (validation):", {k: round(v, 3) for k, v in tau_star.items()})"""),
+    ("code", """FIXED_MIX = ev.fixed_mix_frontier(C[te], FL[te])
+strongest_hit = C[te][:, -1]
+rows, hits = [], {}
+def add_row(name, hit, cost, esc=None):
+    g = cost.mean() / 1e9
+    lo, hi = ev.bootstrap_ci(hit.astype(float))
+    mc = ev.mcnemar_exact(hit, strongest_hit)
+    rows.append({"policy": name, "accuracy": hit.mean(), "acc_ci95": f"[{lo:.3f}, {hi:.3f}]", "gflops/query": g,
+                 "cost_vs_strongest": cost.sum() / FL[te][:, -1].sum(), "escalation_rate": esc,
+                 "fixed_mix_acc_same_cost": ev.frontier_accuracy(FIXED_MIX, g),
+                 "gain_vs_fixed_mix": hit.mean() - ev.frontier_accuracy(FIXED_MIX, g),
+                 "vs_strongest_only_this": mc["a_only"], "vs_strongest_only_strongest": mc["b_only"], "p_mcnemar_vs_strongest": mc["p_value"]})
+    hits[name] = hit
+
+for k, a in enumerate(ORDER):
+    add_row(f"always {a}", C[te][:, k], FL[te][:, k])
+add_row("oracle router (upper bound)", C[te].max(axis=1), FL[te][np.arange(len(te)), oracle["oracle_label"].to_numpy()[te]])
+for name, c in CASCADES.items():
+    for label, t in (("@ tau*", tau_star[name]),) + ((("@ 0.5", 0.5),) if not name.startswith("perfect") else ()):
+        accept = scores[name][te] >= t
+        hit, cost = cs.cascade_outcome(c, accept, C[te], FL[te], ORDER)
+        add_row(f"{name} {label}", hit, cost, 1 - accept.mean())
+
+# Question-only reference from notebook 02: logistic regression estimating P(correct) for every agent.
+lrc = bl.fit_logistic_correctness(X[tr], C[tr])
+pv, pt = lrc(X[va]), lrc(X[te])
+TAUS_Q = np.linspace(0, 1, 41)
+target = C[va][:, -1].mean() - 0.01
+stats = [(float(t), ev.policy_metrics(ev.cheapest_confident(pv, float(t)), C[va], FL[va])) for t in TAUS_Q]
+ok = [(t, m["gflops"]) for t, m in stats if m["accuracy"] >= target]
+tq = min(ok, key=lambda x: x[1])[0] if ok else max(stats, key=lambda x: x[1]["accuracy"])[0]
+ch = ev.cheapest_confident(pt, tq)
+add_row("question-only logistic regression @ tau*", C[te][np.arange(len(te)), ch], FL[te][np.arange(len(te)), ch])
+tau_star["question-only logistic regression"] = tq
+
+results = pd.DataFrame(rows).set_index("policy").round(4)
+print("Test split (", len(te), "questions). CI = 95% bootstrap over questions. McNemar against always", ORDER[-1])
+display(results)"""),
+    ("code", """import matplotlib.pyplot as plt
+
+curves = {n: [(g, a) for _, g, a in cs.cascade_sweep(c, scores[n][te], C[te], FL[te], ORDER, TAUS)]
+          for n, c in CASCADES.items() if not n.startswith("perfect")}
+curves["question-only logistic regression"] = [(g, a) for _, g, a in ev.sweep(ev.cheapest_confident, pt, C[te], FL[te], TAUS_Q)]
+lo = max([FIXED_MIX[0][0]] + [min(g for g, _ in p) for p in curves.values()])
+hi = FL[te][:, -1].mean() / 1e9
+area = {n: ev.area_on_range(p, lo, hi) for n, p in curves.items()}
+area["fixed-agent mix (no router)"] = ev.frontier_area_on_range(FIXED_MIX, lo, hi)
+print(f"mean accuracy over the shared compute range {lo:.0f}-{hi:.0f} GFLOPs:")
+display(pd.Series(area, name="mean accuracy").sort_values(ascending=False).round(4))
+best_gain = {n: max(a - ev.frontier_accuracy(FIXED_MIX, g) for g, a in p) for n, p in curves.items()}
+display(pd.Series(best_gain, name="largest gain over the fixed mix on the curve").sort_values(ascending=False).round(4))
+
+BLUE, YELLOW, RED, GREEN, GREY = "#1F4E9C", "#E3A800", "#C8102E", "#5FA65A", "#7f7f7f"
+show = {"learned, A+C signals (else E)": BLUE, "agreement rule (A+C, else E)": YELLOW,
+        "learned, C signals only (else E)": RED, "question-only logistic regression": GREY}
+fig, ax = plt.subplots(figsize=(7.5, 5))
+xs, ys = zip(*FIXED_MIX)
+ax.plot(xs, ys, "--", color=GREEN, lw=2, label="fixed-agent mix (no router)")
+for n, col in show.items():
+    c_, a_ = zip(*ev.pareto_front(curves[n]))
+    ax.step(c_, a_, where="post", color=col, lw=2, label=n)
+for k, a in enumerate(ORDER):
+    ax.scatter(FL[te][:, k].mean() / 1e9, C[te][:, k].mean(), marker="s", s=36, color="black", zorder=3)
+    ax.annotate(a, (FL[te][:, k].mean() / 1e9, C[te][:, k].mean()), textcoords="offset points", xytext=(5, -10), fontsize=8)
+r = results.loc["oracle router (upper bound)"]
+ax.scatter(r["gflops/query"], r["accuracy"], marker="*", s=160, color="black", zorder=4, label="oracle router (upper bound)")
+ax.set_xlabel("mean GFLOPs per query"); ax.set_ylabel("answer accuracy (correct)")
+ax.set_title("Answer-level cascades vs question-only routing (test split)"); ax.legend(fontsize=7, loc="lower right"); ax.grid(alpha=.3)
+fig.tight_layout(); fig.savefig(work / "cascade_pareto.png", dpi=200); plt.show()"""),
+    ("code", """# Where does the best learned cascade at tau* help or hurt? Accuracy by source dataset.
+best = "learned, A+C signals (else E)"
+accept = scores[best][te] >= tau_star[best]
+hit, cost = cs.cascade_outcome(CASCADES[best], accept, C[te], FL[te], ORDER)
+ds = oracle["dataset"].to_numpy()[te]
+by_ds = pd.DataFrame({"cascade_acc": pd.Series(hit).groupby(ds).mean(), f"always_{E}_acc": pd.Series(strongest_hit).groupby(ds).mean(),
+                      "escalation_rate": pd.Series(1 - accept.astype(float)).groupby(ds).mean(),
+                      "cost_vs_strongest": pd.Series(cost).groupby(ds).sum() / pd.Series(FL[te][:, -1]).groupby(ds).sum(),
+                      "questions": pd.Series(hit).groupby(ds).size()}).round(3)
+display(by_ds)
+
+results.to_csv(work / "cascade_results_test.csv")
+(work / "cascade_results.json").write_text(json.dumps({
+    "tau_star": tau_star, "shared_range_gflops": [lo, hi], "mean_accuracy_shared_range": area,
+    "largest_gain_over_fixed_mix": best_gain, "by_dataset": by_ds.reset_index().to_dict("records"),
+    "features": {"A+C": AC_FEATS, "C": C_FEATS}, "splits": {k: int(len(v)) for k, v in S.items()},
+    "data_commit": data_manifest.get("repo_commit"), "code_commit": COMMIT, "data_dir": str(DATA_DIR),
+}, indent=2, default=float))
+print("saved cascade_results_test.csv, cascade_results.json, cascade_pareto.png in", work)"""),
+    ("markdown", """### Reading the results
+- **gain_vs_fixed_mix** at τ*: positive means the cascade is more accurate than any fixed share of agents at the same compute.
+- Compare the cascades with **question-only logistic regression** (the notebook 02 reference): the difference is what looking at cheap answers adds.
+- **perfect accept** shows the ceiling of this two-step design (C kept exactly when it is right); the gap between it and the learned cascades is what better confidence signals could still win.
+- McNemar against the strongest agent: p ≥ 0.05 means no detectable accuracy difference at that operating point, which is not proof that the two are equal."""),
+]
+
+
+def build(cells, accelerator: str = "nvidiaTeslaT4", internet: bool = True) -> dict:
     return {
         "cells": [
             {
@@ -382,7 +583,7 @@ def build(cells) -> dict:
         "metadata": {
             "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
             "language_info": {"name": "python"},
-            "kaggle": {"accelerator": "nvidiaTeslaT4", "isInternetEnabled": True},
+            "kaggle": {"accelerator": accelerator, "isInternetEnabled": internet},
         },
         "nbformat": 4,
         "nbformat_minor": 5,
@@ -391,9 +592,11 @@ def build(cells) -> dict:
 
 def main() -> None:
     root = Path(__file__).resolve().parents[1] / "notebooks"
-    for name, cells in [("01_build_oracle_dataset.ipynb", NB01), ("02_train_router.ipynb", NB02)]:
+    for name, cells, acc in [("01_build_oracle_dataset.ipynb", NB01, "nvidiaTeslaT4"),
+                             ("02_train_router.ipynb", NB02, "nvidiaTeslaT4"),
+                             ("03_answer_cascades.ipynb", NB03, "none")]:
         out = root / name
-        out.write_text(json.dumps(build(cells), indent=1, ensure_ascii=False) + "\n")
+        out.write_text(json.dumps(build(cells, acc), indent=1, ensure_ascii=False) + "\n")
         print("wrote", out)
 
 

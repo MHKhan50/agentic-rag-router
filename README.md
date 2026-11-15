@@ -8,9 +8,9 @@ This project learns a router that reads a query and sends it to the
 *cheapest agent that can still answer it correctly*, and measures that
 trade-off with real models, real benchmarks and full cost accounting.
 
-> **Status:** research in progress. The oracle dataset pipeline, router training,
-> baselines and statistical evaluation are implemented and tested on CPU. The
-> full GPU run has not been done yet, so no results are reported.
+> **Status:** research in progress. The full oracle dataset (2,000 questions, five agents) and the
+> router training run (notebook 02) are done; their results are being written up. Notebook 03 tests
+> answer-level cascades on the same saved answers.
 
 ## Research question
 
@@ -82,11 +82,13 @@ src/agentic_rag_router/
   baselines.py     fixed, random, kNN and logistic-regression routers
   evaluation.py    accuracy/cost, Pareto AUC, bootstrap CI, McNemar, ECE
   orchestrator.py  inference-time routing with confidence escalation
+  cascade.py       answer-level cascades: cheap agents first, escalate on weak signals
 notebooks/
   01_build_oracle_dataset.ipynb
   02_train_router.ipynb
 scripts/make_notebook.py
 tests/test_core.py
+tests/test_cascade.py
 ```
 
 ## Reproduce
@@ -97,6 +99,11 @@ with `RUN_MODE = "smoke"`, check the tables, then set `RUN_MODE = "full"`.
 The full run (2,000 questions) needs about 13–18 GPU hours on T4 x2, so it spans two Kaggle sessions. Start it with *Save Version → Save & Run All (Commit)*. After 11 hours the pipeline saves its work and stops with a `TimeBudgetReached` message; attach that version's output as an input (*Add Input → Your Work*) and run it again, and it continues where it stopped. The 7B model is spread over both GPUs with at most 60% of each GPU's memory used for weights, and a batch that still runs out of memory is retried as two half batches. Then run
 `notebooks/02_train_router.ipynb` in the same session (or attach notebook 01's
 output as an input) to train the router and all baselines.
+
+`notebooks/03_answer_cascades.ipynb` needs no GPU: attach notebook 01's output as an input and run it. It
+keeps the small RAG agent's answer when cheap signals look reliable (agreement between the two small
+agents, refusals, retrieval similarity) and escalates otherwise, and compares this with the
+question-only routers at the same compute.
 
 **Tests (CPU, no downloads).**
 
@@ -110,9 +117,10 @@ pytest -q
 1. Oracle dataset (English) — implemented
 2. Router training with fixed, random, kNN and logistic-regression baselines,
    Pareto AUC, 5 seeds, bootstrap CIs, McNemar, ECE, gate ablation — implemented
-3. Code-mixed English / Roman Urdu query set with human-checked sample
-4. Further baselines: zero-shot LLM router, complexity classifier
-5. Public release of dataset, router weights and leaderboard
+3. Answer-level cascades (agreement, refusal and retrieval signals) — implemented, notebook 03
+4. Code-mixed English / Roman Urdu query set with human-checked sample
+5. Further baselines: zero-shot LLM router, complexity classifier
+6. Public release of dataset, router weights and leaderboard
 
 ## Licence
 
