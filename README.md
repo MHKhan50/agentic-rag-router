@@ -1,5 +1,7 @@
 # Agentic RAG Router
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24339546.svg)](https://doi.org/10.5281/zenodo.24339546)
+
 **Cost-aware neural routing of queries to specialist retrieval-augmented agents.**
 
 A multi-agent RAG system wastes compute when every query goes to its most
