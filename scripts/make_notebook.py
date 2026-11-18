@@ -323,6 +323,11 @@ tests = {}
 for name in ["router: oracle @ tau*", "router: correctness @ tau*", "router: correctness (default)"]:
     for ref in [strongest, "logistic regression, correctness (default)", "kNN (k=15), correctness (default)"]:
         tests[f"{name} vs {ref}"] = ev.mcnemar_exact(hits(name), hits(ref))
+# Every other policy in the paper's table against the strongest agent.
+for name in sorted(choices):
+    key = f"{name} vs {strongest}"
+    if name != strongest and key not in tests:
+        tests[key] = ev.mcnemar_exact(hits(name), hits(strongest))
 display(pd.DataFrame(tests).T)
 
 ece = [ev.expected_calibration_error(pt, C[te]) for _, pt in probs["router: correctness"]]

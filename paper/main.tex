@@ -12,14 +12,14 @@
 \usepackage[numbers,sort&compress]{natbib}
 \usepackage{xurl}
 \usepackage[hidelinks]{hyperref}
-\hypersetup{pdftitle={Knowing Which Agent Will Be Right: Question-Only Routers and Answer-Level Cascades Leave a 15-Point Oracle Gap in Multi-Agent RAG},pdfauthor={Muzammal Hussain}}
+\hypersetup{pdftitle={Routers and Cascades Miss a 15-Point Oracle Gap in Multi-Agent RAG},pdfauthor={Muzammal Hussain}}
 \usepackage{caption}
 \captionsetup{font=small,labelfont=bf}
 
 \newcommand{\code}[1]{\texttt{#1}}
 \setlength{\emergencystretch}{3em}
 
-\title{\textbf{Knowing Which Agent Will Be Right: Question-Only Routers\\and Answer-Level Cascades Leave a 15-Point Oracle Gap\\in Multi-Agent RAG}}
+\title{\textbf{Routers and Cascades Miss a 15-Point Oracle Gap\\in Multi-Agent RAG}}
 \author{Muzammal Hussain\\
 \small Independent researcher, Glasgow, United Kingdom\\
 \small \href{mailto:muzammal@masmatixinnovations.co.uk}{muzammal@masmatixinnovations.co.uk}\\
@@ -82,7 +82,12 @@ Our contributions are:
 from preference data and reports large cost savings at near-strong quality. FrugalGPT~\cite{chen2023frugalgpt}
 combines prompt adaptation, approximation and an LLM cascade in which a scorer decides whether to accept an answer or
 call the next model. We study the same two ideas, question-level routing and answer-level cascades, with five agents
-rather than two, and with the fixed-agent mix as the baseline that a router has to beat.
+rather than two, and with the fixed-agent mix as the baseline that a router has to beat. Hybrid
+LLM~\cite{ding2024hybrid} routes each query to a small or a large model from predicted difficulty, with a quality
+level that can be tuned at test time. AutoMix~\cite{aggarwal2024automix} lets a small model check its own answer and
+uses a POMDP-based router to decide whether to call a larger model, which is close to our answer-level cascades.
+RouterBench~\cite{hu2024routerbench} provides a benchmark and dataset of model outputs for comparing routers on
+cost and quality; we follow its practice of judging routers against non-learned baselines on a shared cost axis.
 
 \paragraph{Adaptive retrieval.} Adaptive-RAG~\cite{jeong2024adaptiverag} trains a classifier that predicts question
 complexity and chooses between no retrieval, single-step retrieval and iterative retrieval in the style of
@@ -247,7 +252,8 @@ the fixed-agent mix and simple baselines on a shared compute range, not only sav
 The agents come from one model family at two sizes, and other agent sets may be more or less complementary. Each
 dataset contributed 500 questions, and the test split has 75 per dataset, so per-dataset results are uncertain; the
 oracle and all policies were scored once with greedy decoding. Compute is estimated from parameters and tokens, not
-measured as time or energy. Correctness uses a lenient rule (containment or F1 $\ge 0.6$), which may credit some
+measured as time or energy, and it counts only model inference: the cost of retrieval (embedding, index search and
+re-ranking) is not included, which slightly favours agents that retrieve more often. Correctness uses a lenient rule (containment or F1 $\ge 0.6$), which may credit some
 partly wrong answers. Cascade signals are simple; signals such as token probabilities, self-consistency over samples
 or an LLM judge were not tested, and every cascade kept only the small retrieval agent's answer, so cascades that
 choose among several agents' answers remain open. We did not test code-mixed questions.
@@ -263,7 +269,8 @@ a cheap answer can be trusted.
 \section*{Code and data availability}
 
 Code, the three Kaggle notebooks (oracle dataset, router training, answer-level cascades), the saved test-split
-results and the figure script are at \url{https://github.com/MHKhan50/agentic-rag-router}. The questions come from
+results and the figure script are at \url{https://github.com/MHKhan50/agentic-rag-router} and archived on
+Zenodo (\href{https://doi.org/10.5281/zenodo.24339546}{doi:10.5281/zenodo.24339546}). The questions come from
 public datasets under their own licences (NQ-Open and HotpotQA CC BY-SA, SQuAD CC BY-SA 4.0, MuSiQue CC BY 4.0);
 derived data are released under CC BY-SA 4.0 and code under Apache 2.0.
 
