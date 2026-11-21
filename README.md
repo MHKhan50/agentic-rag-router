@@ -132,6 +132,19 @@ pytest -q
 5. Further baselines: zero-shot LLM router, complexity classifier
 6. Public release of dataset, router weights and leaderboard
 
+## How to cite
+
+```bibtex
+@misc{hussain2026router,
+  author    = {Hussain, Muzammal},
+  title     = {{Routers and Cascades Miss a 15-Point Oracle Gap in Multi-Agent RAG}},
+  year      = {2026},
+  publisher = {Zenodo},
+  doi       = {10.5281/zenodo.24339546},
+  url       = {https://doi.org/10.5281/zenodo.24339546}
+}
+```
+
 ## Licence
 
 Code and router weights: [Apache License 2.0](LICENSE) (see [NOTICE](NOTICE)).
