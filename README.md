@@ -140,10 +140,12 @@ pytest -q
   title     = {{Routers and Cascades Miss a 15-Point Oracle Gap in Multi-Agent RAG}},
   year      = {2026},
   publisher = {Zenodo},
-  doi       = {10.5281/zenodo.24339546},
-  url       = {https://doi.org/10.5281/zenodo.24339546}
+  doi       = {10.5281/zenodo.24464707},
+  url       = {https://doi.org/10.5281/zenodo.24464707}
 }
 ```
+
+Software (code, notebooks, results): [doi:10.5281/zenodo.24339546](https://doi.org/10.5281/zenodo.24339546).
 
 ## Licence
 
